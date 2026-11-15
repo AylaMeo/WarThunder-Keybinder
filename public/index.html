@@ -35,6 +35,10 @@
       <button id="layerBtn" class="pop-btn" aria-haspopup="true" aria-expanded="false" title="Also show the keys of other layers on this one">Also show <span class="pop-count" id="layerCount"></span>&#9662;</button>
       <div class="pop-menu" id="layerMenu" hidden role="group" aria-label="Also show these layers"></div>
     </div>
+    <div class="pop edit-only" id="orderPop">
+      <button id="orderBtn" class="pop-btn" aria-haspopup="true" aria-expanded="false" title="Put the binds of every action in the same device order, e.g. keyboard before Azeron">Bind order &#9662;</button>
+      <div class="pop-menu" id="orderMenu" hidden role="group" aria-label="Bind order by device"></div>
+    </div>
     <span class="spacer"></span>
     <button id="reload" title="Reload now">Reload</button>
     <button id="settingsBtn" class="icon-btn" title="Settings" aria-label="Settings" aria-haspopup="dialog">
@@ -46,6 +50,7 @@
   </header>
 
   <div class="warn" id="warn" hidden></div>
+  <div class="edits-bar" id="editsBar" hidden role="status"></div>
 
   <main class="layout">
     <aside class="side" id="left" aria-label="Bound actions">
@@ -53,6 +58,7 @@
         <div class="side-title"><h2>Bound <span class="count" id="boundCount"></span></h2>
           <button class="mini hide-panel" data-hide="left" title="Hide this panel (an edge tab brings it back)" aria-label="Hide the Bound panel">Hide</button></div>
         <input type="search" id="filter" placeholder="Filter actions or keys..." aria-label="Filter">
+        <div class="dim side-hint edit-only">Click an action or one of its binds to edit it.</div>
       </div>
       <div class="side-body" id="boundList"></div>
     </aside>
@@ -82,6 +88,7 @@
         <span><i class="sw unbound"></i>Set up on device, nothing bound in game</span>
         <span><i class="sw special"></i>Azeron function (macro, profile switch, Xbox button...)</span>
         <span><i class="sw empty"></i>Not assigned on device</span>
+        <span class="edit-only"><i class="sw edited"></i>Bind edited here, not in the game yet</span>
       </div>
       </div>
     </section>
@@ -175,6 +182,17 @@
       </section>
 
       <section class="set-sec">
+        <h3>Bind editing <span class="dim">(off by default)</span></h3>
+        <label class="set-row"><span>Edit binds in this app and save them as a controls file for the game's own import</span><input type="checkbox" id="bindEditing"></label>
+        <div class="set-note set-warn"><strong>Whether this is safe to use is not known.</strong> Gaijin has not said if a controls file made by another
+          program is allowed, and its rules against "unauthorized modifications" do not say what counts. The app only writes a new file
+          into your Saves folder, which you load yourself with the game's Import from file; it never changes a file the game owns and
+          never touches the running game. No rule or ban report against this was found, but there is no official permission either.
+          Use it at your own risk.</div>
+        <div class="dim set-note" id="bindEditingNote"></div>
+      </section>
+
+      <section class="set-sec">
         <h3>Analog stick</h3>
         <div class="set-row"><span>Tells the live dot which way is right and up. Only needed if the dot moves the wrong way.</span>
           <span class="set-actions"><button class="mini" id="calStick">Calibrate</button><button class="mini" id="calReset">Reset</button></span></div>
@@ -190,6 +208,7 @@
     </div>
   </div>
 
+  <div class="bind-menu" id="bindMenu" hidden role="dialog" aria-label="Edit the binds of an action"></div>
   <button class="edge-handle left" id="showLeft" title="Show the Bound panel">Bound &rsaquo;</button>
   <button class="edge-handle right" id="showRight" title="Show the alerts panel">&lsaquo; Alerts</button>
   <script src="app.js" type="module"></script>

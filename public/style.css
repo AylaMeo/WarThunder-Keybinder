@@ -315,3 +315,74 @@ body.compact .acts { font-size: 10px; }
   body, body.no-left, body.no-right, body.no-left.no-right { --side: 0px; }   /* the side panels sit below, not beside */
   body { --w: clamp(34px, calc((100vw - 60px) / 9.7), 80px); }
 }
+
+/* ---- bind editor: the floating menu, the edits bar and the "Bind order" menu ---- */
+.row.can-edit { cursor: pointer; }
+.row .bind { display: inline-flex; align-items: center; gap: 3px; border-radius: 6px; outline-offset: 1px; }
+.row .bind:hover { outline: 1px solid var(--bound-edge); }
+.side-hint { font-size: 11px; }
+.ed-dot { display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: #ffd34d; vertical-align: middle; }
+/* a card that shows a bind edited here (not in the game yet): a yellow corner dot, in overlay mode too */
+.card.ed::before { content: ''; position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: #ffd34d; box-shadow: 0 0 0 1.5px rgba(0, 0, 0, .45); z-index: 1; }
+.sw.edited { background: #ffd34d; border-color: #ffd34d; border-radius: 50%; }
+
+.edits-bar { display: flex; flex-direction: column; gap: 4px; padding: 6px 16px; background: #2b2410; color: #ffe9a8; border-bottom: 1px solid #7a6420; }
+.edits-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
+.edits-msg { font-size: 12px; overflow-wrap: anywhere; }
+.bm-primary { background: var(--bound); border-color: var(--bound-edge); color: #fff; }
+.bm-primary:disabled { opacity: .45; }
+body.overlay .edits-bar, body.compact .edits-bar .edits-msg { display: none; }
+
+.bind-menu { position: fixed; z-index: 80; width: min(440px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: auto; padding: 0 12px 12px;
+  display: flex; flex-direction: column; gap: 8px; background: var(--panel); border: 1px solid var(--bound-edge); border-radius: 12px; box-shadow: 0 16px 44px rgba(0, 0, 0, .6); }
+.bm-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 -12px; padding: 9px 12px 7px; cursor: move; user-select: none;
+  border-bottom: 1px solid var(--line); background: var(--panel2); border-radius: 12px 12px 0 0; position: sticky; top: 0; z-index: 1; }
+.bm-head strong { color: var(--accent); font-size: 14px; overflow-wrap: anywhere; }
+.bm-sub { font-size: 12px; }
+.bm-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.bm-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; grid-template-areas: 'n keys dev' 'n act act'; gap: 4px 8px; align-items: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel2); }
+.bm-row.sel { border-color: var(--cyan); }
+.bm-row.cap { border-color: #ffd34d; }
+.bm-n { grid-area: n; color: var(--dim); font-weight: 700; text-align: center; }
+.bm-keys { grid-area: keys; display: flex; flex-wrap: wrap; align-items: center; gap: 3px; min-width: 0; }
+.bm-keys .chip, .bm-capkeys .chip { font-size: 12px; padding: 1px 6px; }
+.bm-dev { grid-area: dev; color: var(--dim); font-size: 11px; white-space: nowrap; }
+.bm-act { grid-area: act; display: flex; flex-wrap: wrap; gap: 4px; }
+.bm-act button.mini, .ord-list button.mini { margin-left: 0; padding: 2px 9px; }
+.bind-menu button:disabled, .pop-menu button:disabled { opacity: .4; cursor: default; }
+.bm-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.bm-tools button { padding: 4px 10px; font-size: 12px; }
+.bm-cap { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px dashed #ffd34d; border-radius: 8px; }
+.bm-captitle { font-weight: 700; color: #ffe38a; }
+.bm-capkeys { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 28px; }
+.bm-capkey { display: inline-flex; align-items: center; gap: 2px; padding: 2px 6px 2px 2px; border-radius: 7px; font-size: 12px; }
+.bm-help { font-size: 11px; line-height: 1.35; }
+.bm-warn { font-size: 12px; color: #ffd28a; }
+
+.ord-list { list-style: none; margin: 2px 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.ord-list li { display: flex; align-items: center; gap: 6px; }
+.ord-n { width: 14px; color: var(--dim); font-weight: 700; text-align: center; }
+.ord-name { flex: 1; white-space: nowrap; }
+.ord-scope { display: flex; align-items: center; gap: 8px; color: var(--dim); white-space: nowrap; }
+.ord-scope select { padding: 3px 6px; font-size: 12px; }
+#orderApply { padding: 4px 10px; font-size: 12px; }
+
+/* "View changes" in the edits bar: every edited action, what the file says now and what it will be */
+.chg-menu { width: min(780px, calc(100vw - 32px)); max-height: min(62vh, 560px); overflow: auto; gap: 2px; color: var(--text); }
+.chg-menu .pop-note { max-width: none; padding: 0 6px 4px; }
+.chg-row { display: grid; grid-template-columns: minmax(150px, 1fr) 70px minmax(0, 1.6fr) auto; gap: 4px 10px; align-items: center; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+.chg-row:hover { background: var(--panel2); }
+.chg-name { min-width: 0; overflow-wrap: anywhere; }
+.chg-kind { font-size: 11px; color: var(--dim); }
+.chg-kind.unbound { color: #ffb3c1; }
+.chg-kind.bound, .chg-kind.changed { color: #ffe38a; }
+.chg-binds { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 5px; min-width: 0; }
+.chg-bind { display: inline-flex; align-items: center; gap: 3px; }
+.chg-arrow { color: #ffd34d; font-weight: 700; padding: 0 3px; }
+.chg-row button.mini { margin-left: 0; }
+
+/* Bind editing is an option (Settings > Bind editing): without it, nothing that edits binds is on screen */
+body:not(.editing) .edit-only { display: none !important; }
+body:not(.editing) .row .bind:hover { outline: none; }
+.set-warn { color: #ffd28a; background: #3a2a10; border: 1px solid #6b4d1a; border-radius: 8px; padding: 8px 10px; line-height: 1.4; }
+.set-row input[type="checkbox"] { accent-color: var(--bound-edge); width: 16px; height: 16px; margin: 0; }

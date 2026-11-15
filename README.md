@@ -1,6 +1,7 @@
 # War Thunder Keybinder
-
-<!-- One or two sentences: what this is and who it is for. -->
+a completely llm code generated electron app that has a nice layout view of your war thunder keybinds, layer switching, the ability to label keys.
+it also has the ability to mass edit your keybinds via creating a file you can import the normal war thunder way, but i'm a little sketched out if it may trigger anti cheat, so it has warnings. ymmv.
+it also supports showing mouse and an azeron cyborg 2, and the common? keyboard layouts, idk ask claude to add yours if it isn't included.
 
 ## Screenshots
 
@@ -8,15 +9,11 @@
 
 ## Getting started
 
-<!-- What to install and how to run it. -->
-
-## Using it
-
-<!-- The things you want people to know first. -->
+todo xd
 
 ## Notes
 
-<!-- Anything else: credits, licence, known problems. -->
+:3c
 
 ---
 

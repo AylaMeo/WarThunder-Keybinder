@@ -1,10 +1,10 @@
 # War Thunder Keybinder
 
-Local viewer for your War Thunder controls on an **Azeron Cyborg 2** and a **Logitech mouse**.
+Local viewer and bind editor for your War Thunder controls on an **Azeron Cyborg 2** and a **Logitech mouse**.
 Layers (one per control group in the game): Air, Helicopter, Ground, Naval, Submarine, Infantry, Replay/Spectator,
 plus a Common overlay (includes the 3 TrackIR shortcuts) and a Drone overlay (Ground and Naval).
 There is no gamepad tab: the game's gamepad group has no shortcuts of its own; a pad just uses the normal vehicle actions.
-Sidebars show what is bound and what is missing.
+Sidebars show what is bound and what is missing. Editing binds is an option, off by default (see "Editing binds").
 
 ```
 node server.mjs        # browser version: http://localhost:5177
@@ -42,7 +42,7 @@ panel back. View settings are saved in `ui.json`.
 
 The cog opens the settings page: the War Thunder controls file, the Azeron profile, the G HUB profile (used by "Add from
 G HUB" in the mouse layout editor), the view and panel sizes, the keyboard layout, the **mouse layout editor**, the
-**hotkeys** (desktop app only, see below), analog-stick calibration (plus a raw axis readout), and a data section with a "Reload data" button and the folder your settings are kept in. New settings of this kind go here.
+**hotkeys** (desktop app only, see below), the **bind editing** switch (off by default, see "Editing binds"), analog-stick calibration (plus a raw axis readout), and a data section with a "Reload data" button and the folder your settings are kept in. New settings of this kind go here.
 
 **View > Device panels** chooses how the Azeron, keyboard and mouse panels are laid out when they don't fit next to each
 other: *Stacked* (the default: a panel that doesn't fit moves down, and the page scrolls up and down) or *Side by side* (the
@@ -94,6 +94,67 @@ The mouse panel is lined up with the bottom of the Azeron panel everywhere in th
   details list what the game has bound to each.
 * A wired key that the drawing does not have (another Azeron model) and that sends something the game can bind gets a card in
   an extra row under the drawing, so nothing bound is ever invisible.
+
+## Editing binds
+
+**Off by default.** Switch it on in Settings > Bind editing (it asks first). Until then the app only shows your binds: no bind
+menu, no "Bind order", no edits bar, and the edit and save endpoints refuse. Switching it off again keeps the edits you made
+(in `edits.json`) but hides them.
+
+**Whether this is safe to use is not known.** Gaijin has not said if a controls file made by another program is allowed, and
+its rules against "unauthorized modifications" do not say what counts. No rule or ban report against it was found, but there
+is no official permission either. Use it at your own risk.
+
+The app never changes a file the game owns. You edit binds here, save them as a **new controls file**, and load that file with
+the game's own **Import from file** (Controls menu).
+
+**The bind menu.** Click an action in the Bound or Missing list, or one of its binds, and a small box opens next to the list
+(drag it by its title if it covers the keys you want). It lists the action's binds in order:
+
+* the arrows move a bind up or down (the binds are saved in this order, and the game loads them in the order they are in the file);
+* **Change** sets another key or chord for that bind, **Remove** deletes it, **Add bind** adds one (the game keeps 3 per action);
+* **Order by device** sorts this action's binds by the device order (below); **Unbind** removes them all; **Reset to file** drops
+  your edit of this action.
+
+Axes are not edited here (an axis row only highlights its keys).
+
+**Setting a bind (Change / Add bind).** Press the keys, mouse buttons or Azeron keys together, anywhere outside the box: hold the
+modifier first, then the key (`LCtrl` then `C` gives `LCtrl+C`). Any input can be the held part, as in the game
+(`JOY43 + Mouse5`). A bind holds up to 3 inputs. Pressing again after letting go starts over. You can also click keys on the
+device panels to add them one at a time (click again to take one out), which is how to enter PrtSc on some systems and the
+Azeron's joystick buttons 33 and up (the live input helper sees the first 32). The wheel counts too (wheel up / down as the
+game's mouse buttons 6 / 7 is *inferred*, as elsewhere in this app: check such a bind in game). Nothing is typed while a bind is being captured, Esc included, so use the **Cancel** button.
+The box warns when the chord is already bound to another action. **Use this** saves it.
+
+**Device order.** "Bind order" in the top bar holds one order for Keyboard, Mouse, Azeron and Other joystick. "Reorder n actions"
+sorts the binds of every action in the layers shown (or in every layer) into that order; binds of the same device keep their
+order. A bind's device is what its chip shows: an Azeron key that sends a keyboard key counts as the Azeron, and a chord counts
+as the device of its last input. Reordering an action that still has the preset's default binds writes those binds into the
+file, taken from `data/presets.json`: after a game update, refresh the data first (see "Refreshing after a game update").
+
+**Edits are a preview.** They are kept in `edits.json` and shown everywhere at once: a yellow dot marks an edited action in
+the lists and the keys that show it. The game knows nothing about them until you import the file.
+**View changes** in the yellow bar lists every edited action with what your controls file says now and what it will be
+(reordered, changed, bound or unbound): click a row to go to that action and open its binds, or **Undo** to drop that one edit.
+
+**Getting the edits into the game.**
+
+1. Press **Save file for import** in the yellow bar. This writes `wtkb-<date>-<time>.blk` into
+   `Documents/My Games/WarThunder/Saves`. A file is never replaced; saving twice gives two files.
+2. In War Thunder open Controls and press the import button at the bottom left, then pick that file.
+3. Once the game has saved its own config, the edits it now contains stop being marked here by themselves.
+
+The first time, make an export in game first (Controls, export button, into the same folder): it is your backup, and the app
+uses it as the pattern for the settings block (below). After the first import, check in game: one joystick bind, one chord, one
+reordered action (is the order in the Controls menu the one you set?) and one sensitivity or invert option.
+
+What is in the saved file: your controls file's `controls{}` block, with only the edited actions replaced. Every other line
+is written back exactly as it was read (other binds, axes, the device mapping the joystick numbers belong to; the game uses
+that mapping to renumber joystick buttons when your devices have changed). A bind you only moved keeps its own block, so
+anything else the game stored in it stays. A file exported by the game also carries a `settings{}` block (sensitivities,
+invert options and the like): when the Saves folder holds such a file, the saved file gets the same block with the values
+your live config has now, so importing it changes none of them. When your controls file is itself an exported file, its own
+`settings{}` and options are kept as they are, so they are as old as that file.
 
 ## Also show (layers shown through)
 
@@ -177,9 +238,11 @@ matching key(s) on the device view and open their details. The highlight fades a
 `machine.blk` only stores changes from the default preset, so the app resolves default chain + your overrides.
 An empty block such as `ID_AIR_BRAKE{}` means "explicitly unbound".
 
-What the app writes: its four settings files, `config.json`, `ui.json` (view settings), `labels.json` and `mouse-layout.json`
-(in this folder when run from source, in `%APPDATA%\wt-keybinder` for the exe, or wherever `WTKB_DATA_DIR` points); the
-desktop window's position and hotkeys in `%APPDATA%\wt-keybinder\window.json`; and the short-lived G HUB temp copy. Nothing else.
+What the app writes: its four settings files, `config.json`, `ui.json` (view settings), `labels.json` and `mouse-layout.json`,
+and your bind edits, `edits.json` (all in this folder when run from source, in `%APPDATA%\wt-keybinder` for the exe, or wherever
+`WTKB_DATA_DIR` points); the desktop window's position and hotkeys in `%APPDATA%\wt-keybinder\window.json`; the short-lived
+G HUB temp copy; and, only when you press "Save file for import", a new `wtkb-....blk` in the game's Saves folder. It never
+changes or replaces a file the game or a device wrote. Nothing else.
 
 ## Mapping notes
 
@@ -205,12 +268,14 @@ from one of them (or the totals collapse), `build-data` stops with a message and
 
 ## Tests
 
-`npm test` runs the unit tests in `test/` (the BLK parser, preset-chain resolution, the key-code tables, the keyboard
-layouts, the Azeron / G HUB readers and the server's request checks). They run on made-up data and write only to a temp
+`npm test` runs the unit tests in `test/` (the BLK parser and writer, preset-chain resolution, the key-code tables, the keyboard
+layouts, the Azeron / G HUB readers, the bind edits, the file saved for import and the server's request checks). They run on made-up data and write only to a temp
 folder; your binds, Azeron profile and G HUB database are not opened (the server tests do let the app look for control files
 in `Saves/`, as it does on every start).
 
 ## Known limits
 
 * "Same input, several actions" is only a hint; many are intentional.
+* Bind editing covers shortcuts (keys, mouse buttons, joystick buttons). Axes, sensitivities and other options are set in game.
+* A bind you change (not just move) is written as a plain bind: an activation type the game had stored in the old one is not carried over.
 * Overlays only draw over borderless / windowed games.

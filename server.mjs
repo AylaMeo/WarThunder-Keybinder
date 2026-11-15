@@ -1,12 +1,17 @@
-// War Thunder keybind viewer. Zero dependencies (Node >= 22.13). Read-only on game/device files:
-// the only files this app writes are its four settings files (config.json, ui.json, labels.json, mouse-layout.json).
-// They live in this folder, or in the folder named by WTKB_DATA_DIR (the packaged desktop app points that at its user-data folder).
+// War Thunder keybind viewer and bind editor. Zero dependencies (Node >= 22.13). Read-only on the game's and the devices' own
+// files. What this app writes: its settings files (config.json, ui.json, labels.json, mouse-layout.json) and the bind edits
+// (edits.json), which live in this folder or in the folder named by WTKB_DATA_DIR (the packaged desktop app points that at its
+// user-data folder); and, when the user asks for it, a NEW controls file "wtkb-<date>.blk" in the game's Saves folder, for the
+// game's own "Import from file". It never changes or replaces a file the game wrote.
 import http from 'node:http';
 import { readFileSync, writeFileSync, renameSync, copyFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import { readControls, resolveBinds, readDeviceMapping, describeInput, describeBinding } from './lib/wtconfig.mjs';
+import { readControls, readHotkeys, resolveBinds, readDeviceMapping, describeInput, describeBinding } from './lib/wtconfig.mjs';
+import { parseBlk, block } from './lib/blk.mjs';
+import { cleanBinds, rebaseEdits, activeEdits, bindsEqual, deviceSnapshot, MAX_BINDS, MAX_CHORD } from './lib/edits.mjs';
+import { buildExport } from './lib/wtexport.mjs';
 import { readStore, listProfiles, readProfile, defaultStorePath } from './lib/azeron.mjs';
 import { loadGHub, listGHubProfiles, readGHubProfile, cleanStaleCopies, defaultDbPath } from './lib/ghub.mjs';
 import { keyName, keyTable, mouseName, dikToVk, MOUSE_VK } from './lib/dik.mjs';
@@ -28,6 +33,8 @@ const CONFIG_PATH = join(DATA_DIR, 'config.json');
 const LABELS_PATH = join(DATA_DIR, 'labels.json');
 const MOUSE_PATH = join(DATA_DIR, 'mouse-layout.json');
 const UI_PATH = join(DATA_DIR, 'ui.json');
+const EDITS_PATH = join(DATA_DIR, 'edits.json');   // binds edited here and not in the game yet (not one of the seeded settings files)
+const BIND_DEVICES = ['kb', 'ms', 'az', 'joy'];    // the devices binds can be ordered by (keyboard, mouse, Azeron, other joystick)
 // view settings the page may save (whitelist + types; nothing else is written)
 const UI_KEYS = { tab: 'string', deviceFlow: 'string', kbSize: 'string', common: 'boolean', drone: 'boolean', hideOptional: 'boolean', compact: 'boolean', showMouse: 'boolean', showLeft: 'boolean', showRight: 'boolean', overlayMode: 'boolean', overlaySetup: 'boolean', overlayMouse: 'boolean',
   showAzeron: 'boolean', showKeyboard: 'boolean', overlayAzeron: 'boolean', overlayKeyboard: 'boolean' };
@@ -41,6 +48,8 @@ const cleanUi = (p) => {
     if (Array.isArray(p?.[k])) out[k] = [...new Set(p[k].filter((t) => ['air', 'heli', 'ground', 'naval', 'sub', 'infantry', 'spectator'].includes(t)))];
     else if (k === 'showThrough' && p?.[k] === null) out[k] = null;
   }
+  // bind order by device: all four devices, each once
+  if (Array.isArray(p?.devOrder) && p.devOrder.length === BIND_DEVICES.length && BIND_DEVICES.every((d) => p.devOrder.includes(d))) out.devOrder = [...p.devOrder];
   if (Number.isFinite(p?.overlayOpacity)) out.overlayOpacity = Math.max(35, Math.min(100, Math.round(p.overlayOpacity)));
   const o = p?.overlayPrev;
   if (o && typeof o === 'object') {
@@ -77,9 +86,12 @@ const DEFAULT_MOUSE = [
 ];
 
 const loadConfig = () => ({ machine: 'auto', azeronProfile: 'War Thunder V2', ghubProfile: '', keyboardLayout: 'full', ...readJson(CONFIG_PATH, {}) });
-const savesDir = () => join(homedir(), 'Documents', 'My Games', 'WarThunder', 'Saves');
+// (WTKB_SAVES_DIR: another folder to use as the game's Saves folder; the tests point it at a temp folder)
+const savesDir = () => (process.env.WTKB_SAVES_DIR ? resolve(process.env.WTKB_SAVES_DIR) : join(homedir(), 'Documents', 'My Games', 'WarThunder', 'Saves'));
+const editable = new Set(catalog.filter((it) => !it.axis).map((it) => it.id));   // actions that take binds (an axis is not edited here)
 
-/** Candidate control files: every machine.blk plus exported presets sitting in Saves/. */
+/** Candidate control files: every machine.blk plus exported presets sitting in Saves/.
+ *  `full`: the file has the settings{} block a file exported by the game carries (see lib/wtexport.mjs). */
 function findSources() {
   const out = [];
   const dir = savesDir();
@@ -91,7 +103,8 @@ function findSources() {
         const m = join(p, 'production', 'machine.blk');
         if (existsSync(m)) out.push({ path: m, label: `Live config (account ${e.name})`, mtime: statSync(m).mtimeMs, live: true });
       } else if (e.isFile() && e.name.endsWith('.blk') && !/^(common|lastlogin)\.blk$/.test(e.name)) {
-        if (/hotkeys\s*\{/.test(readFileSync(p, 'utf8'))) out.push({ path: p, label: `Export: ${e.name}`, mtime: statSync(p).mtimeMs });
+        const text = readFileSync(p, 'utf8');
+        if (/hotkeys\s*\{/.test(text)) out.push({ path: p, label: `Export: ${e.name}`, mtime: statSync(p).mtimeMs, full: /^settings\s*\{\s*\S/m.test(text) });
       }
     } catch { /* unreadable file: skip */ }
   }
@@ -132,7 +145,8 @@ function azeronKeyView(k, offset) {
   return { ...functionView(k, offset), alt: (k.alt ?? []).map((a) => functionView(a, offset)) };
 }
 
-function buildState() {
+/** The controls file in use, read and resolved against its preset chain, plus the bind edits that apply to it. */
+function openControls() {
   const cfg = loadConfig();
   const sources = findSources();
   const warnings = [];
@@ -146,13 +160,66 @@ function buildState() {
     machine = sources[0].path;
     controls = readControls(machine);
   }
-  const { effective, origin, axes: effAxes, chain } = resolveBinds(controls, presets);
+  const resolved = resolveBinds(controls, presets);
   let devices = readDeviceMapping(controls);
   // exported presets carry no deviceMapping: borrow the live file's so joystick numbering still works
   if (!devices.length) {
     const live = sources.find((s) => s.live);
     if (live) { try { devices = readDeviceMapping(readControls(live.path)); warnings.push(`No deviceMapping in this file; using ${live.label}`); } catch { /* ignore */ } }
   }
+  /** What the file (with its presets) binds to an action, as chords. */
+  const fileBinds = (id) => (resolved.effective.get(id) ?? []).map((b) => b.inputs.map((i) => ({ kind: i.kind, code: i.code })));
+  // edits.json may have been edited by hand: only known actions and well-formed binds get through
+  const saved = readJson(EDITS_PATH, null);
+  const hotkeys = {};
+  if (saved?.hotkeys && typeof saved.hotkeys === 'object' && !Array.isArray(saved.hotkeys)) {
+    for (const [id, binds] of Object.entries(saved.hotkeys)) {
+      if (!editable.has(id)) continue;
+      try { hotkeys[id] = cleanBinds(binds); } catch { /* a broken entry is dropped */ }
+    }
+  }
+  const rebased = rebaseEdits({ devices: saved?.devices, hotkeys }, devices);
+  // Bind editing is an option (Settings > Bind editing), off unless the user switched it on. While it is off the saved edits
+  // are kept but not applied anywhere, and the edit / export endpoints refuse.
+  const editing = cfg.bindEditing === true;
+  const active = activeEdits(rebased.hotkeys, fileBinds);
+  if (editing && rebased.lost.length) warnings.push(`Some edited binds use a joystick that is not in this controls file (${rebased.lost.join(', ')}): check them before exporting.`);
+  return { cfg, sources, warnings, machine, controls, devices, ...resolved, fileBinds, allEdits: rebased.hotkeys, editing, storedEdits: Object.keys(active).length, edits: editing ? active : {} };
+}
+
+const EDITING_OFF = 'bind editing is switched off (Settings > Bind editing)';
+const saveEdits = (hotkeys, devices) => writeJson(EDITS_PATH, { devices: deviceSnapshot(devices), hotkeys });
+
+/** A file exported by the game, to copy the list of settings{} keys from (lib/wtexport.mjs). Newest first; never the source itself. */
+const exportTemplate = (ctx) => ctx.sources.find((s) => !s.live && s.full && s.path !== ctx.machine) ?? null;
+
+/** Writes the edited binds into a NEW controls file in the Saves folder, for the game's own "Import from file".
+ *  The name is made here (nothing comes from the page) and an existing file is never replaced. */
+function writeExport() {
+  const ctx = openControls();
+  if (!ctx.editing) throw new Error(EDITING_OFF);
+  if (!Object.keys(ctx.edits).length) throw new Error('there are no edited binds to save');
+  const tpl = exportTemplate(ctx);
+  const { text, changed, settings } = buildExport({ sourceText: readFileSync(ctx.machine, 'utf8'), edits: ctx.edits, templateText: tpl ? readFileSync(tpl.path, 'utf8') : null });
+  // read the result back the way the app reads any controls file: every edited action must come out as it was meant
+  const back = readHotkeys(block(parseBlk(text), 'controls'));
+  for (const [id, binds] of Object.entries(ctx.edits)) {
+    if (!bindsEqual((back.get(id) ?? []).map((b) => b.inputs), binds)) throw new Error(`the file did not come out right for ${id}; nothing was written`);
+  }
+  const d = new Date();
+  const two = (n) => String(n).padStart(2, '0');
+  const base = `wtkb-${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}`;
+  const dir = savesDir();
+  for (let n = 1; n <= 50; n++) {
+    const file = `${base}${n > 1 ? `-${n}` : ''}.blk`;
+    try { writeFileSync(join(dir, file), text, { flag: 'wx' }); return { ok: true, file, dir, changed, settings }; } catch (e) { if (e.code !== 'EEXIST') throw e; }
+  }
+  throw new Error('too many files saved this minute; try again in a moment');
+}
+
+function buildState() {
+  const ctx = openControls();
+  const { cfg, sources, warnings, machine, effective, origin, axes: effAxes, chain, devices, edits } = ctx;
   const azDev = devices.find((d) => /azeron/i.test(d.name ?? '') || /^16D0:/i.test(d.devId ?? ''));
   if (!azDev) warnings.push('Azeron not found in deviceMapping: its joystick keys cannot be matched.');
   const azOffset = azDev ? azDev.buttonsOffset : 0;
@@ -169,13 +236,18 @@ function buildState() {
   };
 
   const items = catalog.map((it) => {
-    const binds = (effective.get(it.id) ?? []).map((b) => ({
+    const view = (list) => list.map((b) => ({
       text: describeBinding(b),
       role: it.axisRange ?? null,
       inputs: b.inputs.map((i) => ({ ...i, text: describeInput(i) })),
     }));
+    // an action edited here shows its edited binds everywhere (a preview: the game has them only after the import)
+    const edit = !it.axis && Object.hasOwn(edits, it.id) ? edits[it.id] : null;
+    const inFile = view(effective.get(it.id) ?? []);
+    const binds = edit ? view(edit.map((inputs) => ({ inputs }))) : inFile;
     const axisAssign = it.axis ? axisText(effAxes[it.id]) : [];
-    return { ...it, binds, axisAssign, origin: origin.get(it.id) ?? null, explicitUnbind: effective.has(it.id) && binds.length === 0 };
+    return { ...it, binds, axisAssign, origin: origin.get(it.id) ?? null, explicitUnbind: (!!edit || effective.has(it.id)) && binds.length === 0,
+      ...(edit ? { edited: true, fileBinds: inFile } : {}) };
   });
 
   // Azeron
@@ -222,13 +294,16 @@ function buildState() {
     keyboardChoices,
     config: cfg,
     dataDir: DATA_DIR,
+    // bind edits: how many actions differ from the controls file, and where the file for the game's import would go
+    edits: { enabled: ctx.editing, stored: ctx.storedEdits, count: Object.keys(edits).length, dir: savesDir(), maxBinds: MAX_BINDS, maxChord: MAX_CHORD,
+      settings: !sources.find((s) => s.path === machine)?.live ? 'kept' : exportTemplate(ctx) ? 'live' : 'none' },   // what a saved file would carry as settings{} (lib/wtexport.mjs)
     stamp: stamp(machine),
   };
 }
 
 function stamp(machine) {
   const m = (p) => { try { return statSync(p).mtimeMs; } catch { return 0; } };
-  return [m(machine ?? ''), m(defaultStorePath()), m(defaultDbPath()), m(defaultDbPath() + '-wal')].join('-');
+  return [m(machine ?? ''), m(defaultStorePath()), m(defaultDbPath()), m(defaultDbPath() + '-wal'), m(EDITS_PATH)].join('-');
 }
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml' };
@@ -291,7 +366,23 @@ export function createServer({ cleanTemp = true } = {}) {
         return readBody(req, (body) => {
           try {
             const p = JSON.parse(body);
-            if (url.pathname === '/api/config') {
+            let result = { ok: true };
+            if (url.pathname === '/api/edits') {
+              // { set: { ID_ACTION: [[{kind,code},...],...] | null } }   an action's binds in order ([] = unbound, null = back to the file)
+              // { clear: true }                                         drop every edit
+              const ctx = openControls();
+              if (!ctx.editing) throw new Error(EDITING_OFF);
+              const next = p?.clear === true ? {} : { ...ctx.allEdits };
+              const set = p?.set && typeof p.set === 'object' && !Array.isArray(p.set) ? Object.entries(p.set) : [];
+              if (set.length > 2000) throw new Error('too many changes at once');
+              for (const [id, binds] of set) {
+                if (!editable.has(id)) throw new Error(`unknown action ${clean(id, 60)}`);
+                if (binds === null) delete next[id]; else next[id] = cleanBinds(binds);
+              }
+              saveEdits(activeEdits(next, ctx.fileBinds), ctx.devices);   // (an edit that equals the file is not kept)
+            } else if (url.pathname === '/api/export') {
+              result = writeExport();
+            } else if (url.pathname === '/api/config') {
               const next = { ...loadConfig() };
               for (const k of ['azeronProfile', 'ghubProfile', 'stickCal']) if (typeof p[k] === 'string') next[k] = clean(p[k], 500);
               // the controls file can only be one this app found itself ("auto", or an entry of the list it offers)
@@ -300,6 +391,7 @@ export function createServer({ cleanTemp = true } = {}) {
                 next.machine = p.machine;
               }
               if (keyboardChoices.some((c) => c.id === p.keyboardLayout)) next.keyboardLayout = p.keyboardLayout;
+              if (typeof p.bindEditing === 'boolean') { if (p.bindEditing) next.bindEditing = true; else delete next.bindEditing; }   // (absent = off, the default)
               writeJson(CONFIG_PATH, next);
             } else if (url.pathname === '/api/ui') {
               writeJson(UI_PATH, cleanUi(p));
@@ -332,7 +424,7 @@ export function createServer({ cleanTemp = true } = {}) {
               });
               writeJson(MOUSE_PATH, cells);
             } else return send(res, 404, '{"error":"unknown endpoint"}');
-            send(res, 200, '{"ok":true}');
+            send(res, 200, JSON.stringify(result));
           } catch (e) { send(res, 400, JSON.stringify({ error: String(e.message) })); }
         });
       }

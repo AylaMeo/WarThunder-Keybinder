@@ -50,6 +50,8 @@ function uiDefaults() {
   }
   if (ui.deviceFlow !== 'row') ui.deviceFlow = 'wrap'; // device panels: 'wrap' = stacked (a panel that doesn't fit moves down), 'row' = side by side, scrolling sideways
   ui.showLeft ??= true; ui.showRight ??= true;
+  // "Bind order": the device order an action's binds are sorted into (keyboard, mouse, Azeron, any other joystick)
+  if (!Array.isArray(ui.devOrder) || ui.devOrder.length !== 4 || !['kb', 'ms', 'az', 'joy'].every((d) => ui.devOrder.includes(d))) ui.devOrder = ['kb', 'ms', 'az', 'joy'];
   if (!TABS.some(([k]) => k === ui.tab)) ui.tab = 'air';
   if (new URLSearchParams(location.search).get('mini')) ui.compact = true;
 }
@@ -121,6 +123,9 @@ const keyNameOf = (code) => (S.keyTable.find(([c]) => c === code) ?? [0, `Key${c
 /** In overlay mode, keys that are not set up on the device, not bound in game, or only bound on other tabs are hidden
  *  (their slot stays, so the layout doesn't shift). */
 const ovHide = (c) => (ui.overlayMode && !c.cell?.keep && (c.cls === 'empty' || c.cls === 'unbound' || c.cls === 'idle') ? ' ov-hide' : '');   // (`keep` keys, e.g. Fn and Win on the Vanguard layout, stay visible)
+
+/** A card that shows a bind edited in this app (not in the game yet) carries a small marker. */
+const edCls = (c) => (c.entries.some((e) => e.item.edited) || c.modEntries.some((e) => e.item.edited) ? ' ed' : '');
 
 function classify(entries, assigned) {
   const mine = entries.filter((e) => inSet(e.item));
@@ -271,6 +276,7 @@ function stickCalibrationStep() {
 /** Put the live input state on the cards. `fresh` = called for a new message from the helper (not just a re-render). */
 function updateLive(fresh = false) {
   if (!S) return;
+  if (fresh && bindMenu?.cap) capJoy();   // the bind editor is waiting for a press
   const down = new Set(live.vks);
   const next = new Set();
   for (const k of Object.values(S?.azeron?.keys ?? {})) {
@@ -384,7 +390,7 @@ function renderKeyboard(cards) {
   const body = kbBig() ? cardBody : keyBody;   // Azeron-sized keys have room for the same text as an Azeron card
   el.innerHTML = cards.map((c) => {
     const sel = selected?.dev === 'kb' && String(selected.key) === String(c.key) ? ' sel' : '';
-    const hl = (hlItem && c.entries.some((e) => e.item.id === hlItem) ? ' hl' : '') + (flash.has(`kb:${c.key}`) ? ' flash' : '') + ovHide(c);
+    const hl = (hlItem && c.entries.some((e) => e.item.id === hlItem) ? ' hl' : '') + (flash.has(`kb:${c.key}`) ? ' flash' : '') + edCls(c) + ovHide(c);
     return `<button class="card kkey ${c.cls}${c.cell.keep ? ' keep' : ''}${sel}${hl}" style="${at(c.cell)}" data-dev="kb" data-key="${esc(c.key)}" title="${esc(tip(c))}">
       <span class="ident">${esc(c.cell.l)}</span>${body(c)}</button>`;
   }).join('');
@@ -399,7 +405,7 @@ function renderAzeron(cards) {
     const { cell, k } = c;
     const pos = `grid-column:${cell.c + 1}/span ${cell.w ?? 1};grid-row:${cell.r + 1}/span ${cell.h ?? 1}`;
     const sel = selected?.dev === 'az' && selected.key === cell.id ? ' sel' : '';
-    const hl = (hlItem && c.entries.some((e) => e.item.id === hlItem) ? ' hl' : '') + (flash.has(`az:${cell.id}`) ? ' flash' : '') + (livePressed.has(`az:${cell.id}`) ? ' live' : '') + ovHide(c);
+    const hl = (hlItem && c.entries.some((e) => e.item.id === hlItem) ? ' hl' : '') + (flash.has(`az:${cell.id}`) ? ' flash' : '') + (livePressed.has(`az:${cell.id}`) ? ' live' : '') + edCls(c) + ovHide(c);
     if (cell.stick) return stickHtml(c, pos, sel + (livePressed.has(`az:${cell.id}`) ? ' live' : ''));
     return `<button class="card ${c.cls}${sel}${hl}" style="${pos}" data-dev="az" data-key="${esc(cell.id)}" title="${esc(tip(c))}">
       <span class="ident">${esc(k.ident)}</span>${cardBody(c)}<span class="id">#${esc(cell.id)}</span></button>`;
@@ -436,7 +442,7 @@ function renderMouse(cards) {
     const { cell } = c;
     const pos = `grid-column:${cell.c + 1};grid-row:${cell.r + 1}`;
     const sel = selected?.dev === 'ms' && selected.key === cell.id ? ' sel' : '';
-    const hl = (hlItem && c.entries.some((e) => e.item.id === hlItem) ? ' hl' : '') + (flash.has(`ms:${cell.id}`) ? ' flash' : '') + (livePressed.has(`ms:${cell.id}`) ? ' live' : '') + ovHide(c);
+    const hl = (hlItem && c.entries.some((e) => e.item.id === hlItem) ? ' hl' : '') + (flash.has(`ms:${cell.id}`) ? ' flash' : '') + (livePressed.has(`ms:${cell.id}`) ? ' live' : '') + edCls(c) + ovHide(c);
     if (c.merged) {
       const lab = labelFor('ms', cell.id, c);
       const body = (lab ? `<div class="lab">${esc(lab.text)}</div>` : '') + (c.wheelAxes.length
@@ -623,8 +629,12 @@ function inputChip(inp) {
   }
   return `<span class="chip kb">${esc(inp.text)}</span>`;
 }
+/** Bind editing is an option (Settings > Bind editing), off unless the user switched it on. While it is off nothing that
+ *  edits binds is shown: no bind menu, no "Bind order", no edits bar, and the saved edits are not applied to the view. */
+const editing = () => S?.edits?.enabled === true;
 const bindChips = (item) => [
-  ...item.binds.map((b) => b.inputs.map(inputChip).join('<span class="sub">+</span>')),
+  // (each bind is its own click target: clicking it opens the bind editor on that bind)
+  ...item.binds.map((b, i) => `<span class="bind"${editing() ? ` data-bind="${i}" title="Click to edit this bind"` : ''}>${b.inputs.map(inputChip).join('<span class="sub">+</span>')}</span>`),
   ...item.axisAssign.map((a) => `<span class="chip ${a.dev}">${esc(a.text)}</span>`),
 ].join('<span class="sub"> / </span>');
 const isBound = (it) => it.binds.length > 0 || it.axisAssign.length > 0;
@@ -656,7 +666,8 @@ function renderSides() {
   $('boundCount').textContent = `(${set.filter(isBound).length}/${set.length})`;
   $('missCount').textContent = `(${essential.length} essential, ${optional.length} optional)`;
 
-  const rowHtml = (it, dim) => `<div class="row${hlItem === it.id ? ' hl' : ''}" data-item="${esc(it.id)}"><span class="nm">${esc(it.name)}</span><span class="keys">${dim ? (it.explicitUnbind ? '<span class="chip warn">unbound</span>' : '') : bindChips(it)}</span></div>`;
+  const edMark = '<i class="ed-dot" title="Edited here: not in the game until you import the file"></i>';
+  const rowHtml = (it, dim) => `<div class="row${hlItem === it.id ? ' hl' : ''}${it.axis || !editing() ? '' : ' can-edit'}" data-item="${esc(it.id)}"><span class="nm">${it.edited ? edMark : ''}${esc(it.name)}</span><span class="keys">${dim ? (it.explicitUnbind ? '<span class="chip warn">unbound</span>' : '') : bindChips(it)}</span></div>`;
   const list = (items, dim, scope) => !items.length ? '<div class="note">Nothing here.</div>'
     : [...groupBySection(items)].map(([k, v]) => det(`${scope}|${k}`, v.length < 12, `${esc(k)} <span class="count">(${v.length})</span>`, v.map((it) => rowHtml(it, dim)).join(''), { forceOpen: !!q })).join('');
   $('boundList').innerHTML = list(bound, false, 'bound');
@@ -704,6 +715,457 @@ function renderAttention(cards) {
   $('attnCount').textContent = out.length ? '' : '(none)';
   $('attn').innerHTML = out.join('') || '<div class="note">Everything set up on your devices is bound in game.</div>';
 }
+
+// ---------------------------------------------------------------- bind editor
+// Clicking an action (or one of its binds) in a side list opens a small floating menu to reorder, change, add or remove its
+// binds. Edits are saved by the server (edits.json) and shown everywhere as a preview; the game gets them when the user saves
+// a controls file here and imports it in game. Nothing the game owns is written.
+const DEV_NAME = { kb: 'Keyboard', ms: 'Mouse', az: 'Azeron', joy: 'Other joystick' };
+const DEV_ALL = ['kb', 'ms', 'az', 'joy'];
+const maxBinds = () => S?.edits?.maxBinds ?? 3;   // the game's Controls menu keeps three binds per action
+const maxChord = () => S?.edits?.maxChord ?? 3;
+const sigOf = (i) => `${i.kind}:${i.code}`;
+const sameChord = (a, b) => a.length === b.length && a.map(sigOf).sort().join() === b.map(sigOf).sort().join();   // held together: the order makes no difference in game
+const MOUSE_TEXT = ['LMB', 'RMB', 'MMB', 'Mouse4', 'Mouse5', 'Mouse6 (wheel up)', 'Mouse7 (wheel down)', 'Mouse8'];
+const withText = (i) => (i.text ? i : { ...i, text: i.kind === 'key' ? keyNameOf(i.code) : i.kind === 'mouse' ? MOUSE_TEXT[i.code] ?? `Mouse${i.code + 1}` : `JOY${i.code}` });
+const chordHtml = (inputs) => inputs.map((i) => inputChip(withText(i))).join('<span class="sub">+</span>');
+const plainBinds = (binds) => binds.map((b) => b.inputs.map((i) => ({ kind: i.kind, code: i.code })));
+
+let bindMenu = null;     // the open editor: { id, sel, side, x, y, moved, cap, focus }.  cap = { target: index | 'new', inputs, down, joy, fresh }
+let capListeners = null; // window listeners while a bind is being captured
+let exportDone = null;   // { file, dir, settings } of the file saved last, shown in the edits bar until dismissed
+let orderScope = 'view';
+
+/** Which device an input belongs to, the same way the chips are coloured: an Azeron key that sends a keyboard key or a mouse
+ *  button counts as the Azeron. */
+function inputDev(inp) {
+  const az = Object.values(S.azeron?.keys ?? {});
+  if (inp.kind === 'joy') {
+    const d = S.azeron?.device;
+    return az.some((k) => k.joyCode === inp.code) || (d && inp.code >= d.buttonsOffset && inp.code < d.buttonsOffset + d.buttonsCount) ? 'az' : 'joy';
+  }
+  if (inp.kind === 'mouse') {
+    if (S.g502.cells.some((c) => c.mouse === inp.code)) return 'ms';
+    return az.some((k) => (k.kind === 'mouse' && k.mouse === inp.code) || (k.kind === 'wheel' && inp.code === (k.wheel === 'up' ? 5 : 6))) ? 'az' : 'ms';
+  }
+  if (az.some((k) => k.kind === 'key' && k.key.code === inp.code && !k.key.mods.length)) return 'az';
+  return S.g502.cells.some((c) => c.key === inp.code) ? 'ms' : 'kb';
+}
+/** The device of a whole bind: an Azeron key that sends exactly this chord makes it the Azeron's; otherwise the device of
+ *  the last input (the one pressed while the others are held). */
+function bindDev(b) {
+  const sig = b.inputs.map(sigOf).join('+');
+  const chordKey = Object.values(S.azeron?.keys ?? {}).some((k) => k.kind === 'key' && k.key.code != null && k.key.mods.length
+    && [...k.key.mods, k.key.code].map((c) => `key:${c}`).join('+') === sig);
+  return chordKey ? 'az' : inputDev(b.inputs[b.inputs.length - 1]);
+}
+/** Binds sorted by the device order chosen in "Bind order"; binds of the same device keep their order. */
+function orderByDevice(binds) {
+  const rank = (b) => { const r = ui.devOrder.indexOf(bindDev(b)); return r < 0 ? DEV_ALL.length : r; };
+  return binds.map((b, i) => [b, i]).sort((p, q) => rank(p[0]) - rank(q[0]) || p[1] - q[1]).map(([b]) => b);
+}
+/** Could these binds be saved as an edit? (The server refuses more binds than the game keeps, an over-long chord and repeats;
+ *  a controls file edited by hand can hold such an action. It is then left as it is by the bulk reorder.) */
+const savable = (binds) => binds.length <= maxBinds() && binds.every((b, i) => b.inputs.length >= 1 && b.inputs.length <= maxChord()
+  && new Set(b.inputs.map(sigOf)).size === b.inputs.length && !binds.some((o, j) => j < i && sameChord(o.inputs, b.inputs)));
+/** { actionId: binds } for every action in `items` whose binds are not in device order yet. */
+function deviceOrderChanges(items) {
+  const out = {};
+  for (const it of items) {
+    if (it.axis || it.binds.length < 2 || out[it.id] || !savable(it.binds)) continue;
+    const next = orderByDevice(it.binds);
+    if (next.some((b, i) => b !== it.binds[i])) out[it.id] = plainBinds(next);
+  }
+  return out;
+}
+const orderItems = () => (orderScope === 'all' ? S.items : S.items.filter(inSet));
+
+/** Save edits ({ set: { id: binds | null } } or { clear: true }) and show the result. */
+async function sendEdits(body, what) {
+  const ok = await post('/api/edits', body, what);
+  await load();
+  return ok;
+}
+const saveBinds = (id, binds) => sendEdits({ set: { [id]: binds } }, 'save the bind');
+
+/** Other actions that already use this exact chord, most relevant first (same layer / Common, then the rest). */
+function chordUses(inputs, selfId) {
+  const hits = [];
+  for (const it of S.items) {
+    if (it.id === selfId || it.axis || !it.binds.some((b) => sameChord(b.inputs, inputs))) continue;
+    hits.push({ text: `${it.name} (${TAB_NAME[it.tab] ?? it.tab})`, near: inCore(it) });
+  }
+  return uniq(hits.sort((a, b) => Number(b.near) - Number(a.near)).map((h) => h.text));
+}
+
+function openBindMenu(id, sel, row) {
+  const it = S.items.find((x) => x.id === id);
+  if (!it || it.axis) return false;        // an axis is assigned in game: nothing to edit here
+  stopCapture();
+  const side = row.closest('#right') ? 'right' : 'left';
+  const host = row.closest('.side').getBoundingClientRect();
+  bindMenu = { id, sel, side, x: side === 'left' ? host.right + 8 : host.left - 8, y: row.getBoundingClientRect().top - 56, moved: false, cap: null };
+  return true;
+}
+function closeBindMenu() {
+  stopCapture();
+  bindMenu = null;
+  $('bindMenu').hidden = true;
+}
+function placeBindMenu() {
+  const el = $('bindMenu');
+  if (!bindMenu || el.hidden) return;
+  const w = el.offsetWidth, h = el.offsetHeight;
+  const x = bindMenu.side === 'right' && !bindMenu.moved ? bindMenu.x - w : bindMenu.x;
+  el.style.left = `${Math.max(8, Math.min(x, window.innerWidth - w - 8))}px`;
+  el.style.top = `${Math.max(8, Math.min(bindMenu.y, window.innerHeight - h - 8))}px`;
+}
+
+function captureHtml(it, cap) {
+  const title = cap.target === 'new' ? `New bind (position ${it.binds.length + 1})` : `Change bind ${cap.target + 1}`;
+  const keys = cap.inputs.map((inp, i) => `<button class="bm-capkey" data-bm="capdel" data-i="${i}" title="Take this input out of the bind">${inputChip(withText(inp))}<span aria-hidden="true"> &times;</span></button>`).join('<span class="sub">+</span>');
+  const dup = cap.inputs.length > 0 && it.binds.some((b, i) => i !== cap.target && sameChord(b.inputs, cap.inputs));
+  const uses = cap.inputs.length ? chordUses(cap.inputs, it.id) : [];
+  const full = cap.inputs.length >= maxChord();
+  return `<div class="bm-cap">
+    <div class="bm-captitle">${esc(title)}</div>
+    <div class="bm-capkeys" aria-live="polite">${keys || '<span class="dim">Waiting for input...</span>'}</div>
+    <div class="dim bm-help">Press the keys, mouse buttons or Azeron keys together, anywhere outside this box: hold the modifier first, then the key.
+      Or click keys on the device panels to add them one at a time. A bind holds up to ${maxChord()} inputs${full ? ' (this one is full)' : ''}. Pressing again starts over.</div>
+    ${dup ? '<div class="bm-warn">This action already has that bind.</div>' : ''}
+    ${cap.inputs.some((i) => i.kind === 'mouse' && (i.code === 5 || i.code === 6)) ? '<div class="bm-warn">The wheel as a button (mouse buttons 6 / 7) is this app&#39;s reading of the game&#39;s files, not confirmed: check this bind in game after importing.</div>' : ''}
+    ${uses.length ? `<div class="bm-warn">Also bound to: ${esc(uses.slice(0, 5).join(', '))}${uses.length > 5 ? ` and ${uses.length - 5} more` : ''}</div>` : ''}
+    <div class="bm-tools"><button data-bm="capok"${cap.inputs.length && !dup ? '' : ' disabled'} class="bm-primary">Use this</button><button data-bm="capclear"${cap.inputs.length ? '' : ' disabled'}>Clear</button><button data-bm="capcancel">Cancel</button></div>
+  </div>`;
+}
+
+function renderBindMenu() {
+  const el = $('bindMenu');
+  const it = bindMenu && S ? S.items.find((x) => x.id === bindMenu.id && !x.axis) : null;
+  if (!it || ui.overlayMode || !editing()) { if (bindMenu) closeBindMenu(); el.hidden = true; return; }   // (the overlay is for looking, not editing)
+  const cap = bindMenu.cap;
+  const n = it.binds.length;
+  if (bindMenu.sel != null && bindMenu.sel >= n) bindMenu.sel = null;
+  if (cap && cap.target !== 'new' && cap.target >= n) { stopCapture(); return renderBindMenu(); }
+  const where = [TAB_NAME[it.tab], it.section].filter(Boolean).join(' · ');
+  const from = it.edited ? 'edited here, not in the game yet'
+    : !n ? (it.explicitUnbind ? 'unbound on purpose in your controls file' : 'nothing bound')
+      : it.origin === '(your config)' ? 'from your controls file' : it.origin ? `default of the ${it.origin} preset` : '';
+  const rows = it.binds.map((b, i) => `<li class="bm-row${bindMenu.sel === i ? ' sel' : ''}${cap && cap.target === i ? ' cap' : ''}">
+      <span class="bm-n">${i + 1}</span>
+      <span class="bm-keys">${chordHtml(b.inputs)}</span>
+      <span class="bm-dev">${DEV_NAME[bindDev(b)]}</span>
+      <span class="bm-act">
+        <button class="mini" data-bm="up" data-i="${i}"${i === 0 ? ' disabled' : ''} title="Move this bind one position up" aria-label="Move bind ${i + 1} up">&uarr;</button>
+        <button class="mini" data-bm="down" data-i="${i}"${i === n - 1 ? ' disabled' : ''} title="Move this bind one position down" aria-label="Move bind ${i + 1} down">&darr;</button>
+        <button class="mini" data-bm="change" data-i="${i}" title="Set another key or chord for this bind">Change</button>
+        <button class="mini" data-bm="remove" data-i="${i}" title="Remove this bind">Remove</button>
+      </span></li>`).join('');
+  const sorted = orderByDevice(it.binds);
+  const canOrder = sorted.some((b, i) => b !== it.binds[i]);
+  const order = ui.devOrder.map((d) => DEV_NAME[d]).join(', ');
+  el.innerHTML = `
+    <div class="bm-head" id="bmHead" title="Drag to move this box"><strong>${esc(it.name)}</strong><button class="mini" data-bm="close" aria-label="Close the bind editor">Close</button></div>
+    <div class="dim bm-sub">${esc(where)}${from ? ` &ndash; ${esc(from)}` : ''}</div>
+    ${n ? `<ol class="bm-list">${rows}</ol>` : '<div class="note">Nothing is bound to this action.</div>'}
+    ${savable(it.binds) ? '' : `<div class="bm-warn">Your controls file holds ${n > maxBinds() ? `more than ${maxBinds()} binds` : 'the same bind twice'} for this action. Remove the extra one first: other changes are refused until then.</div>`}
+    ${cap ? captureHtml(it, cap) : `<div class="bm-tools">
+      <button data-bm="add"${n >= maxBinds() ? ` disabled title="The game keeps ${maxBinds()} binds per action"` : ''}>Add bind</button>
+      <button data-bm="devorder"${canOrder ? '' : ' disabled'} title="Sort this action's binds: ${esc(order)} (change the order under Bind order, in the top bar)">Order by device</button>
+      <button data-bm="unbind"${n ? '' : ' disabled'} title="Remove every bind of this action">Unbind</button>
+      <button data-bm="reset"${it.edited ? '' : ' disabled'} title="Drop your edit of this action">Reset to file</button>
+    </div>`}
+    ${it.edited ? `<div class="dim bm-sub">In your controls file now: ${it.fileBinds.length ? it.fileBinds.map((b) => chordHtml(b.inputs)).join('<span class="sub"> / </span>') : 'nothing bound'}</div>` : ''}
+    <div class="dim bm-help">The binds are saved in this order, and the game loads them in the order they are in the file. Changes are a preview until you save a file and import it in game.</div>`;
+  el.hidden = false;
+  placeBindMenu();
+  if (bindMenu.focus) { el.querySelector(`[data-bm="${bindMenu.focus.bm}"][data-i="${bindMenu.focus.i}"]:not(:disabled)`)?.focus(); bindMenu.focus = null; }
+}
+
+// ---- capturing a bind: real key / mouse / Azeron presses, or clicks on the device panels ----
+// e.code -> DirectInput scancode (what War Thunder stores). The physical key decides, not the keyboard language.
+const CODE_DIK = { Escape: 1, Minus: 12, Equal: 13, Backspace: 14, Tab: 15, BracketLeft: 26, BracketRight: 27, Enter: 28, ControlLeft: 29, Semicolon: 39, Quote: 40,
+  Backquote: 41, ShiftLeft: 42, Backslash: 43, Comma: 51, Period: 52, Slash: 53, ShiftRight: 54, NumpadMultiply: 55, AltLeft: 56, Space: 57, CapsLock: 58, NumLock: 69,
+  ScrollLock: 70, Numpad7: 71, Numpad8: 72, Numpad9: 73, NumpadSubtract: 74, Numpad4: 75, Numpad5: 76, Numpad6: 77, NumpadAdd: 78, Numpad1: 79, Numpad2: 80, Numpad3: 81,
+  Numpad0: 82, NumpadDecimal: 83, IntlBackslash: 86, F11: 87, F12: 88, F13: 100, F14: 101, F15: 102, NumpadEnter: 156, ControlRight: 157, NumpadDivide: 181, PrintScreen: 183,
+  AltRight: 184, Pause: 197, Home: 199, ArrowUp: 200, PageUp: 201, ArrowLeft: 203, ArrowRight: 205, End: 207, ArrowDown: 208, PageDown: 209, Insert: 210, Delete: 211,
+  MetaLeft: 219, MetaRight: 220, ContextMenu: 221 };
+'1234567890'.split('').forEach((c, i) => { CODE_DIK[`Digit${c}`] = 2 + i; });
+'QWERTYUIOP'.split('').forEach((c, i) => { CODE_DIK[`Key${c}`] = 16 + i; });
+'ASDFGHJKL'.split('').forEach((c, i) => { CODE_DIK[`Key${c}`] = 30 + i; });
+'ZXCVBNM'.split('').forEach((c, i) => { CODE_DIK[`Key${c}`] = 44 + i; });
+for (let i = 1; i <= 10; i++) CODE_DIK[`F${i}`] = 58 + i;
+const BUTTON_WT = { 0: 0, 2: 1, 1: 2, 3: 3, 4: 4 };   // browser mouse button -> War Thunder mouseButton (left, right, middle, back, forward)
+
+/** A press while capturing. `held`: modifiers the event says are down although their own key press was never seen. */
+function capPress(inp, held = []) {
+  const cap = bindMenu?.cap;
+  if (!cap) return;
+  if (cap.fresh && !cap.down.size) cap.inputs = [];   // everything was let go, then a new press: start over
+  cap.fresh = true;
+  cap.down.add(sigOf(inp));
+  for (const i of [...held, inp]) if (!cap.inputs.some((x) => sigOf(x) === sigOf(i)) && cap.inputs.length < maxChord()) cap.inputs.push(i);
+  renderBindMenu();
+}
+// Ctrl / Alt / Shift: the event flag and the DirectInput codes of the left and right key
+const MOD_KEYS = [['ctrlKey', 29, 157], ['altKey', 56, 184], ['shiftKey', 42, 54]];
+/** Modifiers a key event reports as held whose own press this capture did not see (held before it started, or sent by a
+ *  device or tool that only sets the flag). Which side is unknown then, so the left key is taken. */
+function unseenMods(e, code) {
+  const cap = bindMenu?.cap;
+  if (!cap || MOD_KEYS.some(([, l, r]) => code === l || code === r)) return [];
+  const has = (c) => cap.down.has(`key:${c}`);
+  return MOD_KEYS.filter(([flag, l, r]) => e[flag] && !has(l) && !has(r)).map(([, l]) => ({ kind: 'key', code: l }));
+}
+const capRelease = (inp) => bindMenu?.cap?.down.delete(sigOf(inp));
+/** Azeron joystick buttons, from the live input helper (the first 32; the rest can be clicked on the Azeron panel). */
+function capJoy() {
+  const cap = bindMenu?.cap;
+  if (!cap || !S.azeron?.device) return;
+  const now = live.joy | 0, was = cap.joy | 0;
+  cap.joy = now;
+  for (let n = 0; n < 32; n++) {
+    const is = (now >>> n) & 1, had = (was >>> n) & 1;
+    if (is && !had) capPress({ kind: 'joy', code: S.azeron.offset + n });
+    else if (!is && had) capRelease({ kind: 'joy', code: S.azeron.offset + n });
+  }
+}
+/** A click on a device card while capturing: its input(s) join the bind (again: they leave it). */
+function capAddCard(el) {
+  const cap = bindMenu?.cap;
+  if (!cap) return;
+  const c = deviceCards()[el.dataset.dev]?.find((x) => String(x.key) === el.dataset.key);
+  if (!c?.sig) return;                                  // a key that sends nothing the game can bind
+  const inputs = c.sig.split('+').map((s) => { const [kind, code] = s.split(':'); return { kind, code: Number(code) }; });
+  const has = (i) => cap.inputs.some((x) => sigOf(x) === sigOf(i));
+  if (inputs.every(has)) cap.inputs = cap.inputs.filter((x) => !inputs.some((i) => sigOf(i) === sigOf(x)));
+  else for (const i of inputs) if (!has(i) && cap.inputs.length < maxChord()) cap.inputs.push(i);
+  cap.fresh = false;                                    // built by hand: the next real key press adds to it
+  renderBindMenu();
+}
+function startCapture(target) {
+  stopCapture();
+  bindMenu.cap = { target, inputs: [], down: new Set(), joy: live.joy | 0, fresh: false };
+  // clicks in the editor itself and on the title bar work as usual; a click on a device card adds that key (see the click handler)
+  const own = (e) => !!e.target.closest?.('#bindMenu, .titlebar');
+  const card = (e) => !!e.target.closest?.('.card[data-dev]');
+  const eat = (e) => { e.preventDefault(); e.stopPropagation(); };
+  const on = {
+    keydown: (e) => { eat(e); const code = CODE_DIK[e.code]; if (!e.repeat && code) capPress({ kind: 'key', code }, unseenMods(e, code)); },
+    keyup: (e) => {
+      eat(e);
+      const code = CODE_DIK[e.code];
+      if (!code) return;
+      if (e.code === 'PrintScreen' && !bindMenu?.cap?.down.has(`key:${code}`)) capPress({ kind: 'key', code });   // Windows reports PrtSc only when it is let go
+      capRelease({ kind: 'key', code });
+    },
+    mousedown: (e) => { if (own(e) || card(e)) return; eat(e); if (BUTTON_WT[e.button] != null) capPress({ kind: 'mouse', code: BUTTON_WT[e.button] }); },
+    mouseup: (e) => { if (own(e) || card(e)) return; eat(e); if (BUTTON_WT[e.button] != null) capRelease({ kind: 'mouse', code: BUTTON_WT[e.button] }); },
+    click: (e) => { if (!own(e) && !card(e)) eat(e); },
+    dblclick: (e) => { if (!own(e)) eat(e); },
+    auxclick: (e) => { if (!own(e)) eat(e); },          // middle / back / forward: no autoscroll, no page navigation
+    contextmenu: (e) => { if (!own(e)) eat(e); },
+    wheel: (e) => {
+      if (own(e)) return;
+      eat(e);
+      if (!e.deltaY) return;
+      const inp = { kind: 'mouse', code: e.deltaY < 0 ? 5 : 6 };   // wheel up / down are the game's mouse buttons 6 / 7
+      capPress(inp); capRelease(inp);
+    },
+  };
+  for (const [type, fn] of Object.entries(on)) window.addEventListener(type, fn, { capture: true, passive: false });
+  capListeners = on;
+}
+function stopCapture() {
+  if (capListeners) for (const [type, fn] of Object.entries(capListeners)) window.removeEventListener(type, fn, { capture: true });
+  capListeners = null;
+  if (bindMenu) bindMenu.cap = null;
+}
+
+$('bindMenu').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const b = e.target.closest('[data-bm]');
+  const it = bindMenu && S.items.find((x) => x.id === bindMenu.id);
+  if (!b || b.disabled || !it) return;
+  const i = Number(b.dataset.i);
+  const binds = plainBinds(it.binds);
+  const cap = bindMenu.cap;
+  switch (b.dataset.bm) {
+    case 'close': closeBindMenu(); hlItem = null; render(); return;
+    case 'up': case 'down': {
+      const to = b.dataset.bm === 'up' ? i - 1 : i + 1;
+      if (to < 0 || to >= binds.length) return;
+      [binds[i], binds[to]] = [binds[to], binds[i]];
+      stopCapture();
+      bindMenu.sel = to; bindMenu.focus = { bm: b.dataset.bm, i: to };
+      saveBinds(it.id, binds); return;
+    }
+    case 'remove': stopCapture(); binds.splice(i, 1); bindMenu.sel = null; saveBinds(it.id, binds); return;
+    case 'change': bindMenu.sel = i; startCapture(i); renderBindMenu(); return;
+    case 'add': bindMenu.sel = null; startCapture('new'); renderBindMenu(); return;
+    case 'unbind': bindMenu.sel = null; saveBinds(it.id, []); return;
+    case 'reset': bindMenu.sel = null; saveBinds(it.id, null); return;
+    case 'devorder': bindMenu.sel = null; saveBinds(it.id, plainBinds(orderByDevice(it.binds))); return;
+    case 'capdel': cap?.inputs.splice(i, 1); if (cap) cap.fresh = false; renderBindMenu(); return;
+    case 'capclear': if (cap) { cap.inputs = []; cap.down.clear(); cap.fresh = false; } renderBindMenu(); return;
+    case 'capcancel': stopCapture(); renderBindMenu(); return;
+    case 'capok': {
+      if (!cap?.inputs.length) return;
+      const inputs = cap.inputs.map((x) => ({ kind: x.kind, code: x.code }));
+      if (cap.target === 'new') binds.push(inputs); else binds[cap.target] = inputs;
+      bindMenu.sel = cap.target === 'new' ? binds.length - 1 : cap.target;
+      stopCapture();
+      saveBinds(it.id, binds); return;
+    }
+    default:
+  }
+});
+// the editor can be dragged by its title, out of the way of the keys you want to click
+$('bindMenu').addEventListener('mousedown', (e) => {
+  if (!e.target.closest('#bmHead') || e.target.closest('button') || e.button !== 0 || !bindMenu) return;
+  e.preventDefault();
+  const el = $('bindMenu');
+  const dx = e.clientX - el.offsetLeft, dy = e.clientY - el.offsetTop;
+  const move = (ev) => { if (!bindMenu) return; bindMenu.x = ev.clientX - dx; bindMenu.y = ev.clientY - dy; bindMenu.moved = true; placeBindMenu(); };
+  const up = () => { window.removeEventListener('mousemove', move, true); window.removeEventListener('mouseup', up, true); };
+  window.addEventListener('mousemove', move, true);
+  window.addEventListener('mouseup', up, true);
+});
+window.addEventListener('resize', placeBindMenu);
+window.addEventListener('blur', () => bindMenu?.cap?.down.clear());   // keys let go while another window has the focus report no release
+
+// ---- the edits bar: how many actions are edited, and saving the file for the game's import ----
+let changesOpen = false;   // the "View changes" list in the edits bar
+/** What an edit did to an action, in one word. */
+function changeKind(it) {
+  if (!it.fileBinds.length) return 'bound';
+  if (!it.binds.length) return 'unbound';
+  const set = (list) => list.map((b) => b.inputs.map(sigOf).sort().join('+')).sort().join('|');
+  return set(it.fileBinds) === set(it.binds) ? 'reordered' : 'changed';
+}
+/** The list behind "View changes": every edited action, what the controls file says and what it will be. */
+function changesHtml() {
+  const order = Object.keys(TAB_NAME);
+  const list = S.items.filter((it) => it.edited).sort((a, b) => order.indexOf(a.tab) - order.indexOf(b.tab) || a.name.localeCompare(b.name));
+  const side = (binds) => (binds.length ? binds.map((b) => `<span class="chg-bind">${chordHtml(b.inputs)}</span>`).join('<span class="sub">/</span>') : '<span class="dim">not bound</span>');
+  return `<div class="pop-note">In your controls file now &rarr; after the import. Click a row to open that action; Undo drops its edit.</div>` + list.map((it) =>
+    `<div class="chg-row" data-chg="${esc(it.id)}" title="Show this action and open its binds">
+      <span class="chg-name">${esc(it.name)} <span class="sub">${esc(TAB_NAME[it.tab] ?? it.tab)}</span></span>
+      <span class="chg-kind ${changeKind(it)}">${changeKind(it)}</span>
+      <span class="chg-binds">${side(it.fileBinds)}<span class="chg-arrow" aria-label="becomes">&rarr;</span>${side(it.binds)}</span>
+      <button class="mini" data-chg-undo="${esc(it.id)}" title="Drop the edit of this action">Undo</button>
+    </div>`).join('');
+}
+/** Bring an action into view (its layer, its row in a side list) and open the bind editor on it. */
+function showAction(id) {
+  const it = S.items.find((x) => x.id === id);
+  if (!it) return;
+  if (!inSet(it)) {   // on another layer: go there
+    if (TABS.some(([k]) => k === it.tab)) ui.tab = it.tab;
+    else if (it.tab === 'common') ui.common = true;
+    else if (it.tab === 'drone') { ui.tab = it.droneFor?.[0] ?? 'ground'; ui.drone = true; }
+  }
+  if (!ui.overlayMode) { ui.compact = false; ui.showLeft = true; ui.showRight = true; }   // the lists must be on screen
+  $('filter').value = '';
+  hlItem = id;
+  closeBindMenu();
+  saveUi(); render();
+  const row = [...document.querySelectorAll('.row[data-item]')].find((r) => r.dataset.item === id);
+  if (!row) return;                                  // (an optional action while "Hide optional actions" is ticked)
+  for (let d = row.closest('details'); d; d = d.parentElement?.closest('details')) { d.open = true; if (d.dataset.k) sectionOpen.set(d.dataset.k, true); }
+  row.scrollIntoView({ block: 'center' });
+  if (openBindMenu(id, null, row)) renderBindMenu();
+}
+
+function renderEditsBar() {
+  const n = S.edits?.count ?? 0;
+  const bar = $('editsBar');
+  if (!editing()) exportDone = null;
+  bar.hidden = !editing() || (!n && !exportDone);
+  if (!n) changesOpen = false;
+  if (bar.hidden) { bar.innerHTML = ''; return; }
+  const scroll = $('changesMenu')?.scrollTop ?? 0;   // (the bar is rebuilt on every render: keep the list where it was)
+  const d = exportDone;
+  const saved = d ? `<div class="edits-msg"><strong>Saved ${esc(d.file)}</strong> in ${esc(d.dir)}. In War Thunder open Controls, press the import button at the bottom left and pick that file.
+      ${d.settings === 'none' ? ' The file carries no settings block (no file exported by the game was found in Saves to take its layout from): after importing, check your sensitivity and invert options.' : ''}
+      ${n ? ' The edits stay marked here until the game has saved them.' : ''} <button class="mini" id="exportDismiss">Dismiss</button></div>` : '';
+  bar.innerHTML = (n ? `<div class="edits-row"><span><strong>${n} action${n === 1 ? '' : 's'} edited.</strong> A preview: the game has ${n === 1 ? 'this change' : 'these changes'} only after you import the file.</span>
+      <div class="pop" id="changesPop"><button id="changesBtn" class="pop-btn" aria-haspopup="true" aria-expanded="${changesOpen}" title="List every action you edited: what it is now and what it will be">View changes &#9662;</button>
+        <div class="pop-menu chg-menu" id="changesMenu" role="group" aria-label="Edited actions"${changesOpen ? '' : ' hidden'}>${changesOpen ? changesHtml() : ''}</div></div>
+      <button id="exportBtn" class="bm-primary" title="Writes a new controls file into the game's Saves folder. Nothing the game owns is changed.">Save file for import</button>
+      <button class="mini" id="discardEdits">Discard all</button></div>
+      ${S.edits.settings === 'none' ? '<div class="edits-msg">Tip: export your controls once in game (Controls, export button) before saving. With a file exported by the game in the Saves folder, the file saved here can carry the same settings block.</div>' : ''}` : '') + saved;
+  if ($('changesMenu')) $('changesMenu').scrollTop = scroll;
+}
+async function exportEdits() {
+  let j = null, msg;
+  try {
+    const r = await fetch('/api/export', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    j = await r.json().catch(() => null);
+    if (!r.ok) msg = j?.error ?? `error ${r.status}`;
+  } catch { msg = 'the app is not answering'; }
+  if (msg) { clientWarn = `Could not save the file: ${msg}`; showWarn(); return; }
+  clientWarn = '';
+  exportDone = { file: j.file, dir: j.dir, settings: j.settings };
+  await load();
+}
+$('editsBar').addEventListener('click', async (e) => {
+  const undo = e.target.closest('[data-chg-undo]');
+  const row = e.target.closest('.chg-row');
+  if (e.target.closest('#changesBtn')) { changesOpen = !changesOpen; renderEditsBar(); $('changesBtn')?.focus(); }
+  else if (undo) { undo.disabled = true; await saveBinds(undo.dataset.chgUndo, null); }   // (the list stays open)
+  else if (row) { changesOpen = false; showAction(row.dataset.chg); }
+  else if (e.target.id === 'exportBtn') { e.target.disabled = true; await exportEdits(); }
+  else if (e.target.id === 'exportDismiss') { exportDone = null; renderEditsBar(); }
+  else if (e.target.id === 'discardEdits' && confirm('Discard all bind edits?\n\nThe view goes back to what your controls file says. Files you already saved for import are kept.')) {
+    closeBindMenu(); hlItem = null;
+    await sendEdits({ clear: true }, 'discard the edits');
+  }
+});
+
+// ---- "Bind order": one device order for the binds of every action ----
+function renderOrderMenu() {
+  if (!editing()) { toggleOrderMenu(false); $('orderMenu').innerHTML = ''; return; }
+  const n = Object.keys(deviceOrderChanges(orderItems())).length;
+  $('orderMenu').innerHTML = `<div class="pop-note">The order an action's binds are listed in, by device. A bind made of several inputs counts as the device of its last one.</div>
+    <ol class="ord-list">${ui.devOrder.map((d, i) => `<li><span class="ord-n">${i + 1}</span><span class="ord-name">${DEV_NAME[d]}</span>
+      <button class="mini" data-ord="${i}" data-to="${i - 1}"${i === 0 ? ' disabled' : ''} aria-label="Move ${DEV_NAME[d]} up">&uarr;</button>
+      <button class="mini" data-ord="${i}" data-to="${i + 1}"${i === ui.devOrder.length - 1 ? ' disabled' : ''} aria-label="Move ${DEV_NAME[d]} down">&darr;</button></li>`).join('')}</ol>
+    <label class="ord-scope">Apply to <select id="orderScope"><option value="view"${orderScope === 'view' ? ' selected' : ''}>the layers shown now</option><option value="all"${orderScope === 'all' ? ' selected' : ''}>every layer</option></select></label>
+    <button id="orderApply"${n ? '' : ' disabled'}>${n ? `Reorder ${n} action${n === 1 ? '' : 's'}` : 'Everything is in this order'}</button>
+    <div class="pop-note">One action at a time: click it in a side list and use "Order by device".</div>`;
+}
+function toggleOrderMenu(open) {
+  const menu = $('orderMenu');
+  const show = open ?? menu.hidden;
+  menu.hidden = !show;
+  $('orderBtn').setAttribute('aria-expanded', String(show));
+}
+$('orderBtn').addEventListener('click', (e) => { e.stopPropagation(); toggleLayerMenu(false); toggleOrderMenu(); });
+$('orderMenu').addEventListener('click', async (e) => {
+  e.stopPropagation();
+  const mv = e.target.closest('[data-ord]');
+  if (mv && !mv.disabled) {
+    const from = Number(mv.dataset.ord), to = Number(mv.dataset.to);
+    [ui.devOrder[from], ui.devOrder[to]] = [ui.devOrder[to], ui.devOrder[from]];
+    saveUi(); renderOrderMenu(); renderBindMenu();
+    $('orderMenu').querySelector(`[data-ord="${to}"][data-to="${to + (to - from)}"]:not(:disabled)`)?.focus();
+  } else if (e.target.id === 'orderApply') {
+    const changes = deviceOrderChanges(orderItems());
+    if (!Object.keys(changes).length) return;
+    e.target.disabled = true;
+    await sendEdits({ set: changes }, 'reorder the binds');
+  }
+});
+$('orderMenu').addEventListener('change', (e) => { if (e.target.id === 'orderScope') { orderScope = e.target.value === 'all' ? 'all' : 'view'; renderOrderMenu(); $('orderScope').focus(); } });
+document.addEventListener('click', () => toggleOrderMenu(false));
+document.addEventListener('click', (e) => { if (changesOpen && !e.target.closest('#changesPop')) { changesOpen = false; renderEditsBar(); } });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || bindMenu?.cap) return;      // while a bind is being captured, Esc is a key like any other
+  if (changesOpen) { changesOpen = false; renderEditsBar(); $('changesBtn')?.focus(); }
+  else if (!$('orderMenu').hidden) { toggleOrderMenu(false); $('orderBtn').focus(); }
+  else if (bindMenu && $('settings').hidden && $('layerMenu').hidden) { closeBindMenu(); hlItem = null; render(); }
+});
 
 // ---------------------------------------------------------------- "Also show" layer picker
 function renderLayerMenu() {
@@ -761,6 +1223,7 @@ function render() {
   $('compact').setAttribute('aria-pressed', String(ui.compact));
   document.body.classList.toggle('compact', ui.compact);
   document.body.classList.toggle('overlay', !!ui.overlayMode);
+  document.body.classList.toggle('editing', editing());   // style.css hides the bind-editing controls without it
   document.body.classList.toggle('no-left', !ui.showLeft);
   document.body.classList.toggle('no-right', !ui.showRight);
   $('overlayChk').checked = !!ui.overlayMode;
@@ -783,11 +1246,19 @@ function render() {
   renderMouseEditor();
   renderSides();
   renderAttention(cards);
+  renderEditsBar();
+  renderOrderMenu();
+  renderBindMenu();
   showWarn();
   updateLive();   // the cards and the live indicator were just rebuilt: put the current input state back on them
 }
 
 function fillSelectors() {
+  $('bindEditing').checked = editing();
+  const stored = S.edits?.stored ?? 0;
+  $('bindEditingNote').textContent = editing()
+    ? 'On. Click an action in a side list to edit its binds; "Bind order" in the top bar sorts binds by device.'
+    : `Off: the app only shows your binds.${stored ? ` ${stored} edit${stored === 1 ? '' : 's'} you made earlier ${stored === 1 ? 'is' : 'are'} kept, and hidden until you switch this on again.` : ''}`;
   const src = $('source');
   const cur = S.config.machine === 'auto' ? 'auto' : S.machine;
   src.innerHTML = `<option value="auto">Auto (newest live config)</option>` + S.sources.map((s) => `<option value="${esc(s.path)}">${esc(s.label)}</option>`).join('');
@@ -888,6 +1359,7 @@ document.addEventListener('click', (e) => {
   const f = e.target.closest('.row[data-focus], .row[data-sigs]');
   if (f) { focusFromRow(f); return; }
   const card = e.target.closest('.card');
+  if (card && bindMenu?.cap) { capAddCard(card); return; }   // the bind editor is capturing: the card's key joins the bind
   if (card) {
     flash.clear();
     const key = card.dataset.dev === 'az' ? Number(card.dataset.key) : card.dataset.key;
@@ -896,9 +1368,18 @@ document.addEventListener('click', (e) => {
     render(); return;
   }
   const row = e.target.closest('.row[data-item]');
-  if (row) { hlItem = hlItem === row.dataset.item ? null : row.dataset.item; render(); }
+  if (row) {
+    // an action: highlight its keys and open the bind editor (on the bind that was clicked, if one was); again closes it
+    const id = row.dataset.item;
+    const bind = e.target.closest('[data-bind]');
+    const sel = bind ? Number(bind.dataset.bind) : null;
+    if (!editing()) hlItem = hlItem === id ? null : id;   // bind editing is off: a click only highlights the action's keys
+    else if (hlItem === id && (!bindMenu || (bindMenu.id === id && (sel == null || sel === bindMenu.sel)))) { closeBindMenu(); hlItem = null; }
+    else { hlItem = id; if (!openBindMenu(id, sel, row)) closeBindMenu(); }
+    render();
+  }
 });
-$('layerBtn').addEventListener('click', (e) => { e.stopPropagation(); toggleLayerMenu(); });
+$('layerBtn').addEventListener('click', (e) => { e.stopPropagation(); toggleOrderMenu(false); toggleLayerMenu(); });
 $('layerMenu').addEventListener('click', (e) => e.stopPropagation());
 $('layerMenu').addEventListener('change', (e) => {
   const box = e.target.closest('input[data-extra], input[data-through]');
@@ -1012,6 +1493,22 @@ $('filter').addEventListener('input', () => S && renderSides());
 $('reload').addEventListener('click', load);
 $('source').addEventListener('change', (e) => setConfig({ machine: e.target.value }));
 $('profile').addEventListener('change', (e) => setConfig({ azeronProfile: e.target.value }));
+// Bind editing: off by default; switching it on asks first, because nobody at Gaijin has said such a file is allowed
+const EDITING_WARNING = [
+  'Switch on bind editing?',
+  'Whether this is safe to use is not known. Gaijin has not said if a controls file made by another program is allowed, '
+    + 'and its rules against "unauthorized modifications" do not say what counts.',
+  'What the app does: it writes a NEW controls file into your Saves folder, and you load it yourself with the game\'s own '
+    + 'Import from file. It never changes a file the game owns and never touches the running game. No rule or ban report against '
+    + 'this was found, but there is no official permission either.',
+  'Use it at your own risk.',
+].join('\n\n');
+$('bindEditing').addEventListener('change', async (e) => {
+  const on = e.target.checked;
+  if (on && !confirm(EDITING_WARNING)) { e.target.checked = false; return; }
+  if (!on) { closeBindMenu(); hlItem = null; changesOpen = false; }
+  await setConfig({ bindEditing: on });
+});
 
 // Desktop shell (Electron) hooks; absent when running in a normal browser.
 if (window.kbHost) {
@@ -1137,7 +1634,7 @@ if (window.kbHost) {
 }
 
 setInterval(async () => {
-  if (document.hidden || draft) return;
+  if (document.hidden || draft || bindMenu?.cap) return;   // (a reload would not lose a half-entered bind, but it would flicker)
   try {
     const j = await (await fetch('/api/stamp')).json();
     if (stamp && j.stamp !== stamp) load();

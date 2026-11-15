@@ -1,0 +1,17 @@
+{
+  "name": "wt-keybinder",
+  "version": "0.2.0",
+  "description": "War Thunder keybind viewer for Azeron Cyborg 2 + a Logitech mouse, with a desktop overlay window",
+  "type": "module",
+  "main": "main.cjs",
+  "private": true,
+  "scripts": {
+    "start": "node server.mjs",
+    "app": "electron .",
+    "build-data": "node tools/build-data.mjs"
+  },
+  "engines": { "node": ">=22.5" },
+  "devDependencies": {
+    "electron": "^45.3.2"
+  }
+}

@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>War Thunder Keybinder</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="titlebar" id="titlebar">
+    <span class="tt">War Thunder Keybinder</span>
+    <span class="tb-div host-only" aria-hidden="true"></span>
+    <label class="tb-opt host-only" title="Window opacity">Opacity <input type="range" id="opacity" min="35" max="100" value="100"></label>
+    <label class="tb-chk host-only" title="Make the window background see-through so only the keys show (needs the desktop app)"><input type="checkbox" id="noBg"> Hide background</label>
+    <label class="tb-chk host-only" title="Overlay: compact, no panels, no background, always on top. Untick to restore your previous setup"><input type="checkbox" id="overlayChk"> Overlay</label>
+    <button class="tb host-only" id="pin"title="Keep on top of other windows" aria-pressed="false">Pin</button>
+    <button class="tb host-only" id="ghost" title="Click-through: mouse clicks pass to the game. Ctrl+Alt+L toggles it; Ctrl+Alt+K shows/hides the window" aria-pressed="false">Click-through</button>
+    <span class="tb-div host-only" aria-hidden="true"></span>
+    <button class="tb" id="showAzeron" aria-pressed="true" title="Show or hide the Azeron panel">Azeron</button>
+    <button class="tb" id="showKeyboard" aria-pressed="true" title="Show or hide the keyboard panel">Keyboard</button>
+    <button class="tb" id="showMouse" aria-pressed="true" title="Show or hide the mouse panel">Mouse</button>
+    <span class="tb-div" aria-hidden="true"></span>
+    <button class="tb" id="compact" aria-pressed="false" title="Hide sidebars and details for a small window">Compact</button>
+    <span class="tb-spacer"></span>
+    <button class="tb host-only" id="winmin" aria-label="Minimise">&#8211;</button>
+    <button class="tb close host-only" id="winclose" aria-label="Close">&#10005;</button>
+  </div>
+
+  <header class="top" id="top">
+    <h1>War Thunder <span class="dim">Keybinder</span></h1>
+    <nav class="tabs" id="tabs" role="tablist" aria-label="Vehicle type"></nav>
+    <label class="check"><input type="checkbox" id="overlay" checked> Common</label>
+    <label class="check" id="droneWrap" hidden><input type="checkbox" id="drone"> Drone overlay</label>
+    <div class="pop" id="layerPop">
+      <button id="layerBtn" class="pop-btn" aria-haspopup="true" aria-expanded="false" title="Also show the keys of other layers on this one">Also show <span class="pop-count" id="layerCount"></span>&#9662;</button>
+      <div class="pop-menu" id="layerMenu" hidden role="group" aria-label="Also show these layers"></div>
+    </div>
+    <span class="spacer"></span>
+    <button id="reload" title="Reload now">Reload</button>
+    <button id="settingsBtn" class="icon-btn" title="Settings" aria-label="Settings" aria-haspopup="dialog">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3.2"/>
+        <path d="M19.4 13.5a7.7 7.7 0 0 0 0-3l2-1.6-2-3.4-2.4.9a7.6 7.6 0 0 0-2.6-1.5L14 2.4h-4l-.4 2.5a7.6 7.6 0 0 0-2.6 1.5l-2.4-.9-2 3.4 2 1.6a7.7 7.7 0 0 0 0 3l-2 1.6 2 3.4 2.4-.9a7.6 7.6 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.6 7.6 0 0 0 2.6-1.5l2.4.9 2-3.4z"/>
+      </svg>
+    </button>
+  </header>
+
+  <div class="warn" id="warn" hidden></div>
+
+  <main class="layout">
+    <aside class="side" id="left" aria-label="Bound actions">
+      <div class="side-head">
+        <div class="side-title"><h2>Bound <span class="count" id="boundCount"></span></h2>
+          <button class="mini hide-panel" data-hide="left" title="Hide this panel (an edge tab brings it back)" aria-label="Hide the Bound panel">Hide</button></div>
+        <input type="search" id="filter" placeholder="Filter actions or keys..." aria-label="Filter">
+      </div>
+      <div class="side-body" id="boundList"></div>
+    </aside>
+
+    <section class="center" aria-label="Devices">
+      <div class="devices">
+        <div class="device azeron">
+          <h2>Azeron Cyborg 2 <span class="dim" id="azName"></span></h2>
+          <div class="grid" id="azeron"></div>
+        </div>
+        <div class="device keyboard">
+          <h2>Keyboard <span class="dim" id="kbName"></span></h2>
+          <div class="kbd" id="keyboard"></div>
+        </div>
+        <div class="device mouse">
+          <h2>Mouse <button class="mini" id="editMouse">Edit layout</button></h2>
+          <div class="grid g502" id="g502"></div>
+          <div class="mouse-editor" id="mouseEditor" hidden></div>
+        </div>
+      </div>
+      <div class="dock" id="dock">
+      <div class="detail" id="detail"><span class="dim">Click a key to see what is bound to it and to set its label for each layer.</span></div>
+      <div class="legend" id="legend">
+        <span><i class="sw bound"></i>Bound for this layer</span>
+        <span><i class="sw common"></i>Common / layers always shown</span>
+        <span><i class="sw through"></i>Unbound here: shows what it does on other layers</span>
+        <span><i class="sw idle"></i>Bound only on layers not shown through</span>
+        <span><i class="sw unbound"></i>Set up on device, nothing bound in game</span>
+        <span><i class="sw empty"></i>Not assigned on device</span>
+      </div>
+      </div>
+    </section>
+
+    <aside class="side" id="right" aria-label="Missing and problems">
+      <div class="side-head"><div class="side-title">
+        <button class="mini hide-panel" data-hide="right" title="Hide this panel (an edge tab brings it back)" aria-label="Hide the alerts panel">Hide</button>
+        <h2>Needs attention <span class="count" id="attnCount"></span></h2></div></div>
+      <div class="side-body" id="attn"></div>
+      <div class="side-head"><h2>Missing <span class="count" id="missCount"></span></h2>
+        <label class="check"><input type="checkbox" id="optional"> Hide optional actions</label></div>
+      <div class="side-body grow" id="missList"></div>
+    </aside>
+  </main>
+  <div class="setup-bar" id="setupBar" hidden>
+    <span class="setup-text"><strong>Set up the overlay.</strong> Drag this bar to move the window, drag its edges to resize.</span>
+    <label class="tb-chk"><input type="checkbox" id="setupAzeron"> Azeron</label>
+    <label class="tb-chk"><input type="checkbox" id="setupKeyboard"> Keyboard</label>
+    <label class="tb-chk"><input type="checkbox" id="setupMouse"> Mouse</label>
+    <label class="tb-opt">Opacity <input type="range" id="setupOpacity" min="35" max="100" step="1" value="100"></label>
+    <button class="tb" id="setupSave" style="background:var(--bound);border-color:var(--bound-edge);color:#fff">Save position</button>
+    <button class="tb" id="setupCancel">Cancel</button>
+  </div>
+
+  <div class="modal" id="settings" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="modal-head">
+        <h2 id="settingsTitle">Settings</h2>
+        <button class="mini" id="settingsClose" aria-label="Close settings">Close</button>
+      </div>
+
+      <section class="set-sec">
+        <h3>Controls and devices</h3>
+        <label class="set-row"><span>War Thunder controls file</span><select id="source"></select></label>
+        <label class="set-row"><span>Azeron profile</span><select id="profile"></select></label>
+        <label class="set-row"><span>G HUB profile (offers buttons for the mouse layout)</span><select id="ghubProfile"></select></label>
+      </section>
+
+      <section class="set-sec">
+        <h3>Keyboard</h3>
+        <label class="set-row"><span>Keyboard size / layout <span class="dim">(shows what each key does in War Thunder)</span></span><select id="kbLayout"></select></label>
+        <div class="dim set-note" id="kbNote"></div>
+      </section>
+
+      <section class="set-sec host-section">
+        <h3>Overlay</h3>
+        <div class="set-row"><span>Overlay hotkey <span class="dim">(works while the game has focus; clicking the tray icon does the same)</span></span>
+          <button class="mini" id="hotkeyBtn" title="Click, then press the keys you want (needs Ctrl, Alt or Shift). Esc cancels.">Ctrl+Alt+O</button></div>
+        <div class="set-row"><span>Overlay position and size <span class="dim" id="overlayBoundsText"></span></span>
+          <span class="set-actions"><button class="mini" id="overlaySetup" title="Opens the overlay with a solid, resizable window so you can place it, then Save">Set up...</button><button class="mini" id="overlayBoundsReset">Reset</button></span></div>
+        <div class="set-row"><span>Panels shown in overlay mode</span>
+          <span class="set-actions">
+            <label class="tb-chk"><input type="checkbox" id="overlayAzeron"> Azeron</label>
+            <label class="tb-chk"><input type="checkbox" id="overlayKeyboard"> Keyboard</label>
+            <label class="tb-chk"><input type="checkbox" id="overlayMouse"> Mouse</label>
+          </span></div>
+        <label class="set-row"><span>Overlay opacity <span class="dim" id="overlayOpacityText"></span></span><input type="range" id="overlayOpacity" min="35" max="100" step="1" value="100"></label>
+      </section>
+
+      <section class="set-sec">
+        <h3>Analog stick</h3>
+        <div class="set-row"><span>Tells the live dot which way is right and up. Only needed if the dot moves the wrong way.</span>
+          <span class="set-actions"><button class="mini" id="calStick">Calibrate</button><button class="mini" id="calReset">Reset</button></span></div>
+        <div class="dim set-note" id="calMsg"></div>
+        <div class="dim set-note">Raw axes: <span id="axRead">...</span></div>
+      </section>
+
+      <section class="set-sec">
+        <h3>Data</h3>
+        <div class="set-note dim" id="dataPaths"></div>
+        <div class="set-row"><span>Re-read the game config, Azeron and G HUB data now</span><button class="mini" id="reloadData">Reload data</button></div>
+      </section>
+    </div>
+  </div>
+
+  <button class="edge-handle left" id="showLeft" title="Show the Bound panel">Bound &rsaquo;</button>
+  <button class="edge-handle right" id="showRight" title="Show the alerts panel">&lsaquo; Alerts</button>
+  <script src="app.js" type="module"></script>
+</body>
+</html>

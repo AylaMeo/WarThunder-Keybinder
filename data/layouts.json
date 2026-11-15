@@ -1,0 +1,41 @@
+{
+  "_note": "Azeron Cyborg 2 key positions (grid col,row) transcribed from the Azeron software view. id = Azeron key id. Edit freely.",
+  "azeron": {
+    "cols": 9,
+    "rows": 6,
+    "cells": [
+      { "id": 28, "c": 6, "r": 0 },
+      { "id": 4,  "c": 1, "r": 1 }, { "id": 8,  "c": 2, "r": 1 }, { "id": 12, "c": 3, "r": 1 }, { "id": 17, "c": 4, "r": 1 },
+      { "id": 29, "c": 5, "r": 1 }, { "id": 22, "c": 6, "r": 1 }, { "id": 31, "c": 7, "r": 1 },
+      { "id": 3,  "c": 1, "r": 2 }, { "id": 7,  "c": 2, "r": 2 }, { "id": 11, "c": 3, "r": 2 }, { "id": 16, "c": 4, "r": 2 },
+      { "id": 30, "c": 6, "r": 2 },
+      { "id": 36, "c": 0, "r": 3 }, { "id": 2,  "c": 1, "r": 3 }, { "id": 6,  "c": 2, "r": 3 }, { "id": 10, "c": 3, "r": 3 },
+      { "id": 15, "c": 4, "r": 3 }, { "id": 19, "c": 5, "r": 3 }, { "id": 24, "c": 6, "r": 3, "w": 2, "h": 2, "stick": true },
+      { "id": 41, "c": 8, "r": 3 },
+      { "id": 1,  "c": 1, "r": 4 }, { "id": 5,  "c": 2, "r": 4 }, { "id": 9,  "c": 3, "r": 4 }, { "id": 14, "c": 4, "r": 4 },
+      { "id": 20, "c": 8, "r": 4 },
+      { "id": 37, "c": 1, "r": 5 }, { "id": 38, "c": 2, "r": 5 }, { "id": 13, "c": 3, "r": 5 }, { "id": 18, "c": 4, "r": 5 },
+      { "id": 23, "c": 6, "r": 5 }
+    ]
+  },
+  "g502": {
+    "_note": "slot = G HUB slot name. mouse = WT mouseButton code (0 LMB,1 RMB,2 MMB,3 Mouse4,4 Mouse5). Unknown G HUB functions have no WT code until you set one in data/g502-overrides.json.",
+    "cells": [
+      { "slot": "g1",  "label": "Left",        "c": 0, "r": 0, "mouse": 0 },
+      { "slot": "g3",  "label": "Wheel click", "c": 1, "r": 0, "mouse": 2 },
+      { "slot": "g2",  "label": "Right",       "c": 2, "r": 0, "mouse": 1 },
+      { "slot": "scroll1", "label": "Tilt L",  "c": 0, "r": 1 },
+      { "slot": "wheelup", "label": "Wheel up", "c": 1, "r": 1, "mouse": 5, "fixed": true },
+      { "slot": "scroll2", "label": "Tilt R",  "c": 2, "r": 1 },
+      { "slot": "g11", "label": "G11",         "c": 0, "r": 2 },
+      { "slot": "wheeldown", "label": "Wheel down", "c": 1, "r": 2, "mouse": 6, "fixed": true },
+      { "slot": "g10", "label": "G10",         "c": 2, "r": 2 },
+      { "slot": "g4",  "label": "G4",          "c": 0, "r": 3 },
+      { "slot": "g9",  "label": "G9",          "c": 1, "r": 3 },
+      { "slot": "g6",  "label": "G6",          "c": 2, "r": 3 },
+      { "slot": "g5",  "label": "G5",          "c": 0, "r": 4 },
+      { "slot": "g7",  "label": "G7",          "c": 1, "r": 4 },
+      { "slot": "g8",  "label": "G8",          "c": 2, "r": 4 }
+    ]
+  }
+}

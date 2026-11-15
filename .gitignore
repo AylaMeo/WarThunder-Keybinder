@@ -1,0 +1,16 @@
+# dependencies and build output (rebuild with `npm install` and `powershell -File tools\package.ps1`)
+node_modules/
+dist/
+
+# tool / editor state
+.claude/
+.run/
+
+# logs and scratch
+*.log
+
+# your own app settings (created and changed by the app; kept on disk, never committed)
+config.json
+ui.json
+mouse-layout.json
+labels.json

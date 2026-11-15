@@ -46,7 +46,7 @@ Remove-Item (Join-Path $out 'resources\default_app.asar') -ErrorAction SilentlyC
 # 2) the app (no node_modules, no dist, no tests, no scratch files)
 $app = Join-Path $out 'resources\app'
 New-Item -ItemType Directory -Force $app | Out-Null
-foreach ($f in @('main.cjs', 'preload.cjs', 'server.mjs', 'package.json') + $settings) {
+foreach ($f in @('main.cjs', 'preload.cjs', 'server.mjs', 'package.json', 'LICENSE') + $settings) {
   $p = Join-Path $root $f
   if (Test-Path $p) { Copy-Item $p $app }
 }

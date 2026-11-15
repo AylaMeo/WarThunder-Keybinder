@@ -4,6 +4,7 @@
   "description": "War Thunder keybind viewer for Azeron Cyborg 2 + a Logitech mouse, with a desktop overlay window",
   "type": "module",
   "main": "main.cjs",
+  "license": "GPL-3.0-only",
   "private": true,
   "scripts": {
     "start": "node server.mjs",

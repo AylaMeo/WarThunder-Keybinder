@@ -5,7 +5,15 @@ it also supports showing mouse and an azeron cyborg 2, and the common? keyboard 
 
 ## Screenshots
 
-<!-- Add a screenshot or two here. -->
+The Ground layer with all three panels shown: the Azeron, the keyboard and the mouse.
+
+![The Azeron, keyboard and mouse panels side by side on the Ground layer](docs/images/all-panels.png)
+
+Each panel can also be shown on its own, here the Azeron and the keyboard.
+
+![The Azeron panel on the Ground layer, with the Bound list on the left and Needs attention on the right](docs/images/azeron-panel.png)
+
+![The full-size keyboard panel on the Ground layer](docs/images/keyboard-panel.png)
 
 ## Getting started
 
@@ -14,6 +22,11 @@ todo xd
 ## Notes
 
 :3c
+
+## License
+
+GPL-3.0-only, see [LICENSE](LICENSE). The game data in `data/` comes from War Thunder and belongs to Gaijin Entertainment; the
+license covers this project's own code only.
 
 ---
 

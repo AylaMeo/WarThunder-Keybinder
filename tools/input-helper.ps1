@@ -1,5 +1,6 @@
 # Live input helper (Windows). Prints state CHANGES only, one line each, to stdout:
-#   S found|missing         joystick with the given vendor/product id present or not
+#   S found|missing|keys    joystick with the given vendor/product id present or not; "keys" = no joystick was asked for
+#                           (no Azeron on this PC), so none is looked for and only the whitelisted keys are watched
 #   J <mask>                pressed buttons of that joystick as a bitmask (bit 0 = button 1)
 #   K <vk,vk,...>           which of the WHITELISTED virtual keys / mouse buttons are down (never anything else)
 #   P <centideg>            hat switch (65535 = centred)
@@ -47,8 +48,9 @@ function Find-Joystick {
   return -1
 }
 
-$jid = Find-Joystick
-[Console]::Out.WriteLine($(if ($jid -ge 0) { 'S found' } else { 'S missing' })); [Console]::Out.Flush()
+$wantJoy = $vid -ge 0 -and $pid_ -ge 0
+$jid = if ($wantJoy) { Find-Joystick } else { -1 }
+[Console]::Out.WriteLine($(if (-not $wantJoy) { 'S keys' } elseif ($jid -ge 0) { 'S found' } else { 'S missing' })); [Console]::Out.Flush()
 $lastMask = -1
 $lastPov = -1
 $lastAx = @(-9999, -9999, -9999, -9999, -9999, -9999)
@@ -80,6 +82,6 @@ while ($true) {
   $tick++
   if ($tick % 125 -eq 0) {                       # about once a second
     if ($ParentPid -gt 0 -and -not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) { break }
-    if ($jid -lt 0 -and $vid -ge 0) { $jid = Find-Joystick; if ($jid -ge 0) { $lastMask = -1; $lastPov = -1; $lastAx = @(-9999, -9999, -9999, -9999, -9999, -9999); [Console]::Out.WriteLine('S found'); [Console]::Out.Flush() } }
+    if ($jid -lt 0 -and $wantJoy) { $jid = Find-Joystick; if ($jid -ge 0) { $lastMask = -1; $lastPov = -1; $lastAx = @(-9999, -9999, -9999, -9999, -9999, -9999); [Console]::Out.WriteLine('S found'); [Console]::Out.Flush() } }
   }
 }

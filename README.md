@@ -15,6 +15,24 @@ npm test               # unit tests (node --test)
 
 Needs Node 22.13+ (uses `node:sqlite`, which needed a flag before that). The server listens on 127.0.0.1 only.
 
+## Devices that are not there
+
+The app looks for the Azeron and for G HUB each time it loads its data, and does nothing for the one it does not find:
+
+| | Counts as there when | When it is not there |
+| --- | --- | --- |
+| Azeron | the Azeron software has saved settings on this PC (`%APPDATA%/azeron-software-v1/store.db`), or the game's controls file lists the keypad as a joystick | its profile is not read; the Azeron panel, its title-bar button, its settings (profile, panel size, overlay tick box, analog stick) are left out; the live input helper looks for no joystick |
+| G HUB | its settings database is there (`%LOCALAPPDATA%/LGHUB/settings.db`) | the database is not copied or read; the G HUB profile setting and "Add from G HUB" are left out |
+
+A device that is not there is not reported as a problem (no warning bar); Settings > Data says which were not found. The check is
+only whether those files exist: nothing is started or opened to find out, and it is not a check for whether the keypad is plugged
+in right now (the live input helper reports that, see "Live highlight"). Installing the software later is picked up on the next
+automatic reload. Your show / hide choices for the Azeron panel are kept for when it is back.
+
+The mouse panel does not depend on G HUB: it stays, with its layout editor and live highlight. If only one half of the Azeron is
+there, the app says so: the game lists the keypad but the Azeron software's settings are missing (its keys cannot be shown), or
+the software is set up but the game's controls file does not list the keypad (its joystick keys cannot be matched).
+
 ## Standalone exe
 
 `powershell -File tools\package.ps1` builds `dist\WT-Keybinder\WT Keybinder.exe` (about 360 MB: it carries its own copy of
@@ -218,7 +236,9 @@ id, so the key is inferred from it (see Mapping notes); where that is wrong on y
 Windows' legacy joystick API (`winmm`, first 32 buttons; button n = bit n-1, *inferred*) and polls the state of only the keys
 and mouse buttons your cards use (`GetAsyncKeyState` on a short whitelist the page sends). No hooks, nothing is logged, and
 no other keys are ever reported. It works while the game has focus. Windows only. The header shows "live input on" when the
-Azeron was found. The API only accepts requests from this app's own page (Host/Origin check).
+Azeron was found. When there is no Azeron joystick to read (none in the game's controls file, or its profile could not be read)
+the helper looks for no joystick and only watches the cards' keys and mouse buttons ("live: keys only"); with nothing to watch at
+all it is not started. The API only accepts requests from this app's own page (Host/Origin check).
 
 ## Notifications
 
@@ -269,7 +289,7 @@ from one of them (or the totals collapse), `build-data` stops with a message and
 ## Tests
 
 `npm test` runs the unit tests in `test/` (the BLK parser and writer, preset-chain resolution, the key-code tables, the keyboard
-layouts, the Azeron / G HUB readers, the bind edits, the file saved for import and the server's request checks). They run on made-up data and write only to a temp
+layouts, the Azeron / G HUB readers, what is skipped when a device is not there, the bind edits, the file saved for import and the server's request checks). They run on made-up data and write only to a temp
 folder; your binds, Azeron profile and G HUB database are not opened (the server tests do let the app look for control files
 in `Saves/`, as it does on every start).
 

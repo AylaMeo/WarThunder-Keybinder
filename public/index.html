@@ -16,7 +16,7 @@
     <button class="tb host-only" id="pin" title="Keep on top of other windows" aria-pressed="false">Pin</button>
     <button class="tb host-only" id="ghost" title="Click-through: mouse clicks pass to the game" aria-pressed="false">Click-through</button>
     <span class="tb-div host-only" aria-hidden="true"></span>
-    <button class="tb" id="showAzeron" aria-pressed="true" title="Show or hide the Azeron panel">Azeron</button>
+    <button class="tb az-only" id="showAzeron" aria-pressed="true" title="Show or hide the Azeron panel">Azeron</button>
     <button class="tb" id="showKeyboard" aria-pressed="true" title="Show or hide the keyboard panel">Keyboard</button>
     <button class="tb" id="showMouse" aria-pressed="true" title="Show or hide the mouse panel">Mouse</button>
     <span class="tb-div" aria-hidden="true"></span>
@@ -86,7 +86,7 @@
         <span><i class="sw through"></i>Unbound here: shows what it does on other layers</span>
         <span><i class="sw idle"></i>Bound only on layers not shown through</span>
         <span><i class="sw unbound"></i>Set up on device, nothing bound in game</span>
-        <span><i class="sw special"></i>Azeron function (macro, profile switch, Xbox button...)</span>
+        <span class="az-only"><i class="sw special"></i>Azeron function (macro, profile switch, Xbox button...)</span>
         <span><i class="sw empty"></i>Not assigned on device</span>
         <span class="edit-only"><i class="sw edited"></i>Bind edited here, not in the game yet</span>
       </div>
@@ -105,7 +105,7 @@
   </main>
   <div class="setup-bar" id="setupBar" hidden>
     <span class="setup-text"><strong>Set up the overlay.</strong> Drag this bar to move the window, drag its edges to resize.</span>
-    <label class="tb-chk"><input type="checkbox" id="setupAzeron"> Azeron</label>
+    <label class="tb-chk az-only"><input type="checkbox" id="setupAzeron"> Azeron</label>
     <label class="tb-chk"><input type="checkbox" id="setupKeyboard"> Keyboard</label>
     <label class="tb-chk"><input type="checkbox" id="setupMouse"> Mouse</label>
     <label class="tb-opt">Opacity <input type="range" id="setupOpacity" min="35" max="100" step="1" value="100"></label>
@@ -123,8 +123,8 @@
       <section class="set-sec">
         <h3>Controls and devices</h3>
         <label class="set-row"><span>War Thunder controls file</span><select id="source"></select></label>
-        <label class="set-row"><span>Azeron profile</span><select id="profile"></select></label>
-        <label class="set-row"><span>G HUB profile (offers buttons for the mouse layout)</span><select id="ghubProfile"></select></label>
+        <label class="set-row az-only"><span>Azeron profile</span><select id="profile"></select></label>
+        <label class="set-row ghub-only"><span>G HUB profile (offers buttons for the mouse layout)</span><select id="ghubProfile"></select></label>
       </section>
 
       <section class="set-sec">
@@ -136,7 +136,7 @@
           </select></label>
         <div class="dim set-note">Side by side keeps the panels in one row, with a scroll bar under them (the mouse wheel scrolls it too). Overlay mode always stacks.</div>
         <div class="set-row set-sub"><span>Panel sizes <span class="dim">(keys, spacing and text scale together; at 100% a key is the same size on all three)</span></span></div>
-        <label class="set-row set-indent"><span>Azeron</span><select id="sizeAzeron" aria-label="Azeron panel size"></select></label>
+        <label class="set-row set-indent az-only"><span>Azeron</span><select id="sizeAzeron" aria-label="Azeron panel size"></select></label>
         <label class="set-row set-indent"><span>Keyboard</span><select id="sizeKeyboard" aria-label="Keyboard panel size"></select></label>
         <label class="set-row set-indent"><span>Mouse</span><select id="sizeMouse" aria-label="Mouse panel size"></select></label>
         <div class="dim set-note">A panel that is wider than the window scrolls sideways (its own scroll bar when stacked, the row's when side by side).
@@ -174,7 +174,7 @@
           <span class="set-actions"><button class="mini" id="overlaySetup" title="Opens the overlay with a solid, resizable window so you can place it, then Save">Set up...</button><button class="mini" id="overlayBoundsReset">Reset</button></span></div>
         <div class="set-row"><span>Panels shown in overlay mode</span>
           <span class="set-actions">
-            <label class="tb-chk"><input type="checkbox" id="overlayAzeron"> Azeron</label>
+            <label class="tb-chk az-only"><input type="checkbox" id="overlayAzeron"> Azeron</label>
             <label class="tb-chk"><input type="checkbox" id="overlayKeyboard"> Keyboard</label>
             <label class="tb-chk"><input type="checkbox" id="overlayMouse"> Mouse</label>
           </span></div>
@@ -192,7 +192,7 @@
         <div class="dim set-note" id="bindEditingNote"></div>
       </section>
 
-      <section class="set-sec">
+      <section class="set-sec az-only">
         <h3>Analog stick</h3>
         <div class="set-row"><span>Tells the live dot which way is right and up. Only needed if the dot moves the wrong way.</span>
           <span class="set-actions"><button class="mini" id="calStick">Calibrate</button><button class="mini" id="calReset">Reset</button></span></div>

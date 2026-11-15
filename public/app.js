@@ -58,6 +58,10 @@ function uiDefaults() {
 uiDefaults();
 
 let S = null;          // last state from the server
+// Devices the server did not find on this PC (S.present): their panel, their settings and their share of the live input are
+// left out. Nothing is written to `ui` for this, so your show / hide choices are still there when the device turns up.
+const hasAzeron = () => S?.present?.azeron !== false;
+const hasGHub = () => S?.present?.ghub !== false;
 let stamp = null;
 let selected = null;   // { dev:'az'|'ms', key }
 let hlItem = null;     // action highlighted from a sidebar row
@@ -174,7 +178,7 @@ function deviceCards() {
     }
     return { sig: null, entries: [], modEntries: [] };
   };
-  for (const cell of S.layouts.azeron.cells) {
+  for (const cell of hasAzeron() ? S.layouts.azeron.cells : []) {   // (no Azeron: no cards, so nothing of it is drawn or reported)
     const k = azKeys[cell.id] ?? { id: cell.id, kind: 'none', ident: '', assigned: false };
     const { sig, entries, modEntries } = lookup(k);
     // thumb-pad direction keys send a hat direction; War Thunder's config has no hat binds, so they show as "not bound in game"
@@ -223,12 +227,16 @@ function liveSpec() {
   const [vid, pid] = (S.azeron?.device?.devId ?? '').toLowerCase().split(':');
   return { vid: vid ?? '', pid: pid ?? '', vks: [...vks].sort((a, b) => a - b) };
 }
+const liveWanted = (spec) => !!(spec.vid && spec.pid) || spec.vks.length > 0;
 function startLive() {
   const spec = liveSpec();
   const sig = JSON.stringify(spec);
-  if (liveSrc && sig === liveSig) return;
+  if (sig === liveSig && (liveSrc || !liveWanted(spec))) return;
   liveSrc?.close();
+  liveSrc = null;
   liveSig = sig;
+  // no Azeron joystick to read and no key or mouse-button card to watch: the input helper is not started at all
+  if (!liveWanted(spec)) { live = { status: 'idle', joy: 0, vks: [] }; updateLive(); return; }
   liveSrc = new EventSource(`/api/live?vid=${spec.vid}&pid=${spec.pid}&vks=${spec.vks.join(',')}`);
   liveSrc.onmessage = (e) => { live = JSON.parse(e.data); updateLive(true); };
 }
@@ -297,7 +305,7 @@ function updateLive(fresh = false) {
   }
 
   // analog stick: the dot follows the physical stick, whatever the game does with it.
-  const stick = S?.layouts.azeron.cells.find((c) => c.stick);
+  const stick = hasAzeron() ? S?.layouts.azeron.cells.find((c) => c.stick) : null;
   let sx = 0, sy = 0;
   if (stick) {
     if (fresh) stickCalibrationStep();
@@ -320,7 +328,7 @@ function updateLive(fresh = false) {
     if (dot) { dot.style.left = `${43 + sx * 43}%`; dot.style.top = `${43 + sy * 43}%`; }
   }
   const ind = $('liveInd');
-  if (ind) ind.textContent = live.status === 'found' ? 'live input on' : live.status === 'missing' ? 'live: Azeron not detected' : live.status === 'starting' ? 'live: starting...' : live.status === 'unsupported' ? 'live input: Windows only' : '';
+  if (ind) ind.textContent = live.status === 'found' ? 'live input on' : live.status === 'missing' ? 'live: Azeron not detected' : live.status === 'keys' ? 'live: keys only' : live.status === 'starting' ? 'live: starting...' : live.status === 'unsupported' ? 'live input: Windows only' : '';
 }
 
 // ---------------------------------------------------------------- device rendering
@@ -548,7 +556,7 @@ function renderMouseEditor() {
     <div class="mrow-actions">
       <button class="mini" id="mAdd">+ Add button</button>
       ${slots.length ? `<label class="pos">Add from G HUB <select id="ghubAdd"><option value="">choose...</option>${slots.map((s) => `<option value="${esc(s.slot)}">${esc(s.slot.toUpperCase())}: ${esc(s.label)}</option>`).join('')}</select></label>`
-        : `<span class="note">${S.g502.ghubProfile ? 'Every button of the chosen G HUB profile is already added.' : 'Choose a G HUB profile (under Controls and devices, above) to add its buttons here.'}</span>`}
+        : !hasGHub() ? '' : `<span class="note">${S.g502.ghubProfile ? 'Every button of the chosen G HUB profile is already added.' : 'Choose a G HUB profile (under Controls and devices, above) to add its buttons here.'}</span>`}
     </div>
     <div class="mrow-actions"><button id="mSave">Save layout</button><button class="mini" id="mRevert">Revert</button><span class="note" id="mState" role="status"></span></div>`;
   markDraft();
@@ -1202,8 +1210,11 @@ function render() {
   $('droneWrap').hidden = !droneAvailable();
   for (const d of DEVS) {
     $(`show${d}`).setAttribute('aria-pressed', String(ui[`show${d}`]));
-    document.body.classList.toggle(`no-${d.toLowerCase()}`, !ui[`show${d}`]);
+    document.body.classList.toggle(`no-${d.toLowerCase()}`, !ui[`show${d}`] || (d === 'Azeron' && !hasAzeron()));
   }
+  // a device that is not on this PC: style.css hides everything that is only about it (.az-only / .ghub-only)
+  document.body.classList.toggle('az-absent', !hasAzeron());
+  document.body.classList.toggle('ghub-absent', !hasGHub());
   $('optional').checked = ui.hideOptional;
   document.body.classList.toggle('kb-big', kbBig());
   for (const d of DEVS) {
@@ -1277,7 +1288,9 @@ function fillSelectors() {
     : 'Function keys (F-row) and other keys a smaller board reaches through Fn are not modelled: only the physical keys of the chosen layout are shown.';
   $('dataPaths').innerHTML = [
     `Controls: ${esc(S.machine)}`,
-    S.azeron ? `Azeron: ${esc(S.azeron.name)} (joystick buttons start at ${S.azeron.offset})` : 'Azeron: not found',
+    S.azeron ? `Azeron: ${esc(S.azeron.name)} (joystick buttons start at ${S.azeron.offset})`
+      : hasAzeron() ? 'Azeron: not found' : 'Azeron: not on this PC (its panel, settings and joystick input are left out)',
+    ...(hasGHub() ? [] : ['G HUB: not on this PC (its database is not read)']),
     `Mouse layout: ${S.g502.isDefault ? 'default (not edited yet)' : 'your saved layout'}`,
     `Settings folder: ${esc(S.dataDir ?? '')}`,
   ].join('<br>');

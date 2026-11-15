@@ -182,6 +182,8 @@ body.no-left:not(.compact) #showLeft, body.no-right:not(.compact) #showRight { d
 #compact[aria-pressed="true"], #showMouse[aria-pressed="true"], #showAzeron[aria-pressed="true"], #showKeyboard[aria-pressed="true"] { background: var(--bound); border-color: var(--bound-edge); color: #fff; }
 
 body.no-azeron .device.azeron, body.no-keyboard .device.keyboard, body.no-mouse .device.mouse { display: none; }
+/* a device that is not on this PC (the server's S.present): whatever is only about it is left out */
+body.az-absent .az-only, body.ghub-absent .ghub-only { display: none !important; }
 
 /* keyboard keymap: keys are absolutely placed on a unit grid (--ku = one key width) */
 body { --ku: clamp(24px, calc((100vw - var(--side) - 60px) / 23.6), 50px); }

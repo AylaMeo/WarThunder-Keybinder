@@ -12,8 +12,8 @@ import { readControls, readHotkeys, resolveBinds, readDeviceMapping, describeInp
 import { parseBlk, block } from './lib/blk.mjs';
 import { cleanBinds, rebaseEdits, activeEdits, bindsEqual, deviceSnapshot, MAX_BINDS, MAX_CHORD } from './lib/edits.mjs';
 import { buildExport } from './lib/wtexport.mjs';
-import { readStore, listProfiles, readProfile, defaultStorePath } from './lib/azeron.mjs';
-import { loadGHub, listGHubProfiles, readGHubProfile, cleanStaleCopies, defaultDbPath } from './lib/ghub.mjs';
+import { readStore, listProfiles, readProfile, defaultStorePath, hasStore } from './lib/azeron.mjs';
+import { loadGHub, listGHubProfiles, readGHubProfile, cleanStaleCopies, defaultDbPath, hasGHub } from './lib/ghub.mjs';
 import { keyName, keyTable, mouseName, dikToVk, MOUSE_VK } from './lib/dik.mjs';
 import { createLive } from './lib/live.mjs';
 import { keyboardLayout, keyboardChoices } from './lib/kblayout.mjs';
@@ -163,9 +163,10 @@ function openControls() {
   const resolved = resolveBinds(controls, presets);
   let devices = readDeviceMapping(controls);
   // exported presets carry no deviceMapping: borrow the live file's so joystick numbering still works
+  // (when the file in use IS the live file there is nothing to borrow: no joystick is plugged in, which is not a problem)
   if (!devices.length) {
     const live = sources.find((s) => s.live);
-    if (live) { try { devices = readDeviceMapping(readControls(live.path)); warnings.push(`No deviceMapping in this file; using ${live.label}`); } catch { /* ignore */ } }
+    if (live && live.path !== machine) { try { devices = readDeviceMapping(readControls(live.path)); warnings.push(`No deviceMapping in this file; using ${live.label}`); } catch { /* ignore */ } }
   }
   /** What the file (with its presets) binds to an action, as chords. */
   const fileBinds = (id) => (resolved.effective.get(id) ?? []).map((b) => b.inputs.map((i) => ({ kind: i.kind, code: i.code })));
@@ -221,7 +222,14 @@ function buildState() {
   const ctx = openControls();
   const { cfg, sources, warnings, machine, effective, origin, axes: effAxes, chain, devices, edits } = ctx;
   const azDev = devices.find((d) => /azeron/i.test(d.name ?? '') || /^16D0:/i.test(d.devId ?? ''));
-  if (!azDev) warnings.push('Azeron not found in deviceMapping: its joystick keys cannot be matched.');
+  // Which devices there are, looked up again for every state (the app runs for days; software gets installed meanwhile):
+  //   Azeron  its software has saved settings on this PC, or the game's controls file lists the keypad as a joystick
+  //   G HUB   its settings database is there
+  // Only two "is the file there" checks: nothing is opened, copied or started to find out. For a device that is missing,
+  // nothing below is read and nothing is reported as a problem; the page then leaves out its panel and settings too.
+  const azStore = hasStore();
+  const present = { azeron: azStore || !!azDev, ghub: hasGHub() };
+  if (azStore && !azDev) warnings.push('Azeron not found in deviceMapping: its joystick keys cannot be matched.');
   const azOffset = azDev ? azDev.buttonsOffset : 0;
 
   const axisText = (a) => {
@@ -252,7 +260,10 @@ function buildState() {
 
   // Azeron
   let azeron = null;
-  try {
+  if (!azStore) {
+    // the game knows the keypad, but its keys are set up in the Azeron software, whose settings are not on this PC
+    if (azDev) warnings.push(`Azeron: the game lists the keypad, but the Azeron software's settings were not found (${defaultStorePath()}), so its keys cannot be shown.`);
+  } else try {
     const store = readStore();
     const profile = readProfile(store, cfg.azeronProfile);
     if (profile.name !== cfg.azeronProfile) warnings.push(`Azeron profile "${cfg.azeronProfile}" not found; showing the active profile "${profile.name}". Pick one in Settings.`);
@@ -274,7 +285,7 @@ function buildState() {
   // G502: user-edited layout (mouse-layout.json) + optional G HUB profile used only to *offer* buttons
   let ghubProfiles = [];
   let ghubSlots = [];
-  try {
+  if (present.ghub) try {
     const ghub = loadGHub();   // one read (cached until G HUB's files change) serves both the profile list and the chosen profile
     ghubProfiles = listGHubProfiles(ghub);
     if (cfg.ghubProfile) ghubSlots = readGHubProfile(ghub, cfg.ghubProfile, { model: cfg.ghubModel, overrides: cfg.ghubKeyOverrides });
@@ -285,7 +296,7 @@ function buildState() {
   const axes = Object.entries(effAxes).map(([name, a]) => ({ name, tab: axisTab(name), ...a }));
 
   return {
-    sources, machine, chain, devices, azeron, warnings, items, axes,
+    sources, machine, chain, devices, azeron, present, warnings, items, axes,
     g502: { cells: mouseCells, ghubProfiles, ghubSlots, ghubProfile: cfg.ghubProfile, isDefault: !existsSync(MOUSE_PATH) },
     labels: readJson(LABELS_PATH, {}),
     ui: readJson(UI_PATH, {}),

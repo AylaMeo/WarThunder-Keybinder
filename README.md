@@ -10,16 +10,19 @@ Sidebars show what is bound and what is missing.
 node server.mjs        # browser version: http://localhost:5177
 npm install            # one-time: installs Electron (the desktop window)
 npm run app            # desktop window / overlay
+npm test               # unit tests (node --test)
 ```
 
-Needs Node 22.5+ (uses `node:sqlite`). The server listens on 127.0.0.1 only.
+Needs Node 22.13+ (uses `node:sqlite`, which needed a flag before that). The server listens on 127.0.0.1 only.
 
 ## Standalone exe
 
 `powershell -File tools\package.ps1` builds `dist\WT-Keybinder\WT Keybinder.exe` (about 360 MB: it carries its own copy of
-Electron; no install needed, copy the folder anywhere writable). Your current `config.json`, `labels.json` and
-`mouse-layout.json` are copied in as starting settings; after that the exe keeps its own copies in `resources\app`.
-Rebuild after changing the code. The exe is unsigned, so Windows SmartScreen may warn the first time.
+Electron; no install needed, copy the folder anywhere). Quit the running exe from the tray menu before rebuilding.
+The exe keeps its settings in `%APPDATA%\wt-keybinder`, not in its own folder, so the folder can be read-only and a rebuild
+never overwrites them. Your current `config.json`, `ui.json`, `labels.json` and `mouse-layout.json` are copied in as
+starting settings and are only used the first time (when `%APPDATA%\wt-keybinder` has none yet).
+The exe is unsigned, so Windows SmartScreen may warn the first time.
 
 ## Tray app
 
@@ -38,8 +41,18 @@ panel back. View settings are saved in `ui.json`.
 ## Settings (the cog in the top bar)
 
 The cog opens the settings page: the War Thunder controls file, the Azeron profile, the G HUB profile (used by "Add from
-G HUB" in the mouse editor), the **overlay hotkey** (click it, then press the combination; desktop app only), analog-stick
-calibration (plus a raw axis readout), and a data section with a "Reload data" button. New settings of this kind go here.
+G HUB" in the mouse layout editor), the view and panel sizes, the keyboard layout, the **mouse layout editor**, the
+**hotkeys** (desktop app only, see below), analog-stick calibration (plus a raw axis readout), and a data section with a "Reload data" button and the folder your settings are kept in. New settings of this kind go here.
+
+**View > Device panels** chooses how the Azeron, keyboard and mouse panels are laid out when they don't fit next to each
+other: *Stacked* (the default: a panel that doesn't fit moves down, and the page scrolls up and down) or *Side by side* (the
+panels stay in one row with a scroll bar under them; the mouse wheel over the panels scrolls the row sideways, Shift+wheel
+too). Overlay mode always stacks. Saved with the other view settings in `ui.json`.
+
+**Hotkeys** (desktop app): overlay on/off (default Ctrl+Alt+O), show/hide the window (Ctrl+Alt+K), click-through (Ctrl+Alt+L)
+and compact view (Ctrl+Alt+M). They work while the game has focus, which also means the game never sees those combinations, so
+each one can be changed or switched off: click it, then press the new combination (it needs Ctrl, Alt or Win), Esc to cancel,
+Backspace to switch it off. If another program already owns the combination you are told so and the previous one stays active.
 
 **Overlay position, size and mouse** (desktop app): in Settings > Overlay, "Set up..." opens the overlay with a solid, resizable
 window and a bar at the top. Drag the bar to move the window, drag its edges to resize, tick or untick "Show mouse panel", then
@@ -52,11 +65,12 @@ The mouse panel is lined up with the bottom of the Azeron panel everywhere in th
 
 ## Desktop window and overlay
 
-* **Overlay** button: compact, always on top, 85% opacity, small window. Click again to restore.
+* **Overlay** button: compact, always on top, small window, no taskbar button, with its own opacity (Settings > Overlay,
+  100% unless you change it). Click again to restore.
 * **Pin** keeps the window above the game (use borderless/windowed-fullscreen; exclusive fullscreen hides overlays).
 * **Opacity** slider, **Click-through** (mouse clicks pass through to the game).
-* Global hotkeys (work while the game has focus): **Ctrl+Alt+K** show/hide, **Ctrl+Alt+L** click-through on/off,
-  **Ctrl+Alt+M** compact on/off.
+* Global hotkeys (work while the game has focus), all changeable in Settings > Hotkeys: **Ctrl+Alt+O** overlay,
+  **Ctrl+Alt+K** show/hide, **Ctrl+Alt+L** click-through on/off, **Ctrl+Alt+M** compact on/off.
 * **Compact** (also in the browser, or `?mini=1`) hides sidebars and details and keeps just the two devices.
 
 ## Cards, labels, layers
@@ -65,9 +79,21 @@ The mouse panel is lined up with the bottom of the Azeron panel everywhere in th
   and what the game has bound underneath. Azeron software labels are not used.
 * **Custom labels are per layer.** Click a key, then type a label for Air / Ground / Naval / Infantry /
   Ground drone / Naval drone / Common. The view shows the current layer's label, then drone, then common.
-  Stored in `labels.json`.
+  A label from another layer appears only on a key that is showing that layer (shown through, or "always"), never on a
+  key that is bound on the layer you are on. Stored in `labels.json`.
 * Azeron keyboard keys are decoded (Azeron stores Windows virtual-key codes; modifiers in a separate field) and matched
   to War Thunder keyboard binds. Modifier + key matches only the exact chord.
+* Any Azeron key can be given any of the Azeron software's functions, and all of them are read (the type numbers are the
+  Azeron software's own):
+  * matched to your binds: joystick button, keyboard key, **mouse button** (shown as `LMB`, `Mouse4`...), **mouse wheel
+    up / down** (a key set to turn the wheel; where a layer uses the wheel as an axis the card lists what it scrolls), and
+    the thumb-pad directions;
+  * shown by name on a dashed card, never as "unbound", because the game has nothing to bind to them: macro, input sequence,
+    Xbox button / trigger / stick, profile switching, DPI, media keys, analog toggles, the stick's key / mouse modes.
+* A key's **long-press** and **double-press** functions are read as well: the card shows `hold: ...` / `2x: ...`, and the
+  details list what the game has bound to each.
+* A wired key that the drawing does not have (another Azeron model) and that sends something the game can bind gets a card in
+  an extra row under the drawing, so nothing bound is ever invisible.
 
 ## Also show (layers shown through)
 
@@ -88,6 +114,17 @@ A normal keyboard panel sits between the Azeron and the mouse and shows what War
 (same card colours, "Also show" / show-through, per-layer custom labels, click a key for details). Pick the physical size in
 Settings > Keyboard: Full size (100%), 96% (1800-compact), Corsair Vanguard Pro 96, Tenkeyless (80%), 75%, 65% or 60%.
 
+**Key size**: by default a keyboard key is drawn exactly as big as an Azeron key, with the same text on it. A whole
+keyboard at that size is wider than the window, so it scrolls sideways: with the panels stacked the keyboard panel has its
+own scroll bar (the mouse wheel over it scrolls sideways once the page has nowhere further to go; Shift+wheel always does),
+and with the panels side by side the row's scroll bar covers it. Its size is set with the other panels' (next paragraph),
+where "Fit the window" shrinks the keys to small squares so the whole keyboard fits the window width, as it used to.
+
+**Panel sizes** (Settings > View): the Azeron, keyboard and mouse panels each have their own size, 50% to 200%. A panel is
+scaled as a whole: keys, spacing and text together. At 100% a key is the same size on all three. An enlarged panel that is
+wider than the window scrolls sideways the same way the keyboard does. Overlay mode ignores these sizes and fits everything
+to its own window.
+
 * The Corsair Vanguard Pro 96 layout was drawn from a photo of the board: no navigation column (the function row ends with PrtSc
   and Del), with no gaps between the rows or before the numpad, a 15-unit main block with the numpad right beside it, Left / Down (and Up) in the main
   block and the Right arrow in the numpad's first column, so its 0 key is single width. Its G-keys, LCD, rotary dial and Elgato key
@@ -100,11 +137,19 @@ Settings > Keyboard: Full size (100%), 96% (1800-compact), Corsair Vanguard Pro 
 
 ## Mouse layout
 
-"Edit layout" next to the mouse: add or remove buttons, choose "Mouse button 1-8" or "Keyboard key"
-(for buttons that G HUB turns into a key), and set grid col/row. Pick a G HUB profile to offer its buttons under
-"Add from G HUB". The wheel is an axis, not a button, so it is not a card. Stored in `mouse-layout.json`.
-Default layout: left, right, wheel click, forward above back on the left side, and a **Scroll wheel** card that lists
-which game functions use the wheel on the current layer (the game's mouse axes 2 and up are its per-vehicle wheel slots; *inferred*).
+Settings > Mouse layout: add or remove buttons, choose "Mouse button 1-8" or "Keyboard key"
+(for buttons that G HUB turns into a key), and set grid col/row. Pick a G HUB profile (Settings > Controls and devices) to
+offer its buttons under "Add from G HUB". Nothing changes until you press **Save layout**; **Revert** drops your edits, and
+closing Settings with unsaved edits asks whether to save them. Stored in `mouse-layout.json`.
+Default layout: left, right, wheel click, forward above back on the left side, wheel up / down, and three "Side" placeholders
+with no input yet (set what they send in Settings > Mouse layout, or remove them). When a layer uses the wheel as an axis and nothing is
+bound to wheel up / down, the two wheel cards merge into one **Scroll wheel** card that lists which game functions use the
+wheel on the current layer (the game's mouse axes 2 and up are its per-vehicle wheel slots; *inferred*).
+
+G HUB details (optional, hand-edited in `config.json`): the buttons offered come from the device with the most button slots in
+the chosen profile; `"ghubModel": "g502x-lightspeed"` picks another one. G HUB's built-in keystroke cards carry no key, only an
+id, so the key is inferred from it (see Mapping notes); where that is wrong on your set-up,
+`"ghubKeyOverrides": { "010c": 43 }` maps a card code (the 4 hex digits shown as "G HUB xxxx") to a DirectInput scancode.
 
 ## Live highlight (press a key, its card lights up)
 
@@ -127,19 +172,23 @@ matching key(s) on the device view and open their details. The highlight fades a
 | Default binds | The preset chain named in your file (e.g. `keyboard_ver2` -> `keyboard_ver1` -> ...), in `data/presets.json` |
 | Action list, names, layers | The game's shortcut scripts + `controls.csv`, in `data/catalog.json` |
 | Azeron keys | `%APPDATA%/azeron-software-v1/store.db` (profile picked in the header) |
-| G HUB buttons | `%LOCALAPPDATA%/LGHUB/settings.db`, copied to a temp dir before reading |
+| G HUB buttons | `%LOCALAPPDATA%/LGHUB/settings.db`, copied to a temp dir before reading (the copy is deleted straight after, and only re-made when G HUB's files change) |
 
 `machine.blk` only stores changes from the default preset, so the app resolves default chain + your overrides.
 An empty block such as `ID_AIR_BRAKE{}` means "explicitly unbound".
 
-The app writes only `config.json`, `labels.json` and `mouse-layout.json` in this folder.
+What the app writes: its four settings files, `config.json`, `ui.json` (view settings), `labels.json` and `mouse-layout.json`
+(in this folder when run from source, in `%APPDATA%\wt-keybinder` for the exe, or wherever `WTKB_DATA_DIR` points); the
+desktop window's position and hotkeys in `%APPDATA%\wt-keybinder\window.json`; and the short-lived G HUB temp copy. Nothing else.
 
 ## Mapping notes
 
 * Azeron joystick: `joyButton = buttonsOffset + button - 1` (offset from `deviceMapping`; 28 for you). Verified against your binds.
 * Chords (`JOY43 + Mouse5`): the last input is the trigger, earlier ones are modifiers (`modifier x16`).
-* *Inferred*: G HUB `01xx` keystroke cards are USB HID keys (G5 = `I`, G10 = `'`, G11 = `;` matched your binds).
-  Mouse back/forward = WT mouse buttons 4/5. Drone layer = the "Human Uav" section plus ground "Scout UAV".
+* *Inferred*: G HUB `01xx` keystroke cards are USB HID keys (G10 = `0134` = `'`, G11 = `0133` = `;` matched your binds).
+  One card is treated as an exception: by that rule `010c` (G5) would be `I`, but the app has been showing that button as `\`
+  (noted from a G HUB screenshot), which is now the `ghubKeyOverrides` entry in `config.json` instead of a rule in the code.
+  Remove that entry if `I` is what the button really sends. Mouse back/forward = WT mouse buttons 4/5. Drone layer = the "Human Uav" section plus ground "Scout UAV".
 * Infantry = the game's "Human ..." sections.
 
 ## Refreshing after a game update
@@ -149,7 +198,17 @@ The app writes only `config.json`, `labels.json` and `mouse-layout.json` in this
    `wt_ext_cli unpack_vromf -i <copies> -o <out> --format BlkText --continue Standard`
 3. `node tools/build-data.mjs <out>`
 
+The game's shortcut scripts are read by their shape, not parsed. If an update changes that shape so that nothing can be read
+from one of them (or the totals collapse), `build-data` stops with a message and leaves `data/` as it was.
+
 `node tools/calibrate.mjs <machine.blk> ["Azeron profile"]` prints the Azeron key -> joyButton -> action table.
+
+## Tests
+
+`npm test` runs the unit tests in `test/` (the BLK parser, preset-chain resolution, the key-code tables, the keyboard
+layouts, the Azeron / G HUB readers and the server's request checks). They run on made-up data and write only to a temp
+folder; your binds, Azeron profile and G HUB database are not opened (the server tests do let the app look for control files
+in `Saves/`, as it does on every start).
 
 ## Known limits
 

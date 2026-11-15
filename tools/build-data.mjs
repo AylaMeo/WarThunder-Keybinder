@@ -5,40 +5,26 @@
 import { readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseBlk, block, value } from '../lib/blk.mjs';
+import { parseBlk, block } from '../lib/blk.mjs';
+import { readHotkeys, readAxes, basePreset } from '../lib/wtconfig.mjs';
 
 const root = process.argv[2];
 if (!root) { console.error('usage: node tools/build-data.mjs <unpacked-dir>'); process.exit(1); }
 const out = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
-mkdirSync(out, { recursive: true });
+/** Stop without touching data/: a half-understood game update must not replace data that works. */
+const fail = (msg) => { console.error(`build-data: ${msg}\nNothing was written; data/ is unchanged.`); process.exit(1); };
 
-const presetName = (p) => p.replace(/^.*hotkey\./, '').replace(/\.blk$/, '');
-
-// ---- presets -------------------------------------------------------------------------
+// ---- presets (read with the same code the app uses for your own controls file) -----------
 const hkDir = join(root, 'aces.vromfs.bin_u', 'config', 'hotkeys');
 const presets = {};
-const KINDS = { keyboardKey: 'key', mouseButton: 'mouse', joyButton: 'joy' };
 for (const f of readdirSync(hkDir)) {
   const m = f.match(/^hotkey\.(.+)\.blk$/);
   if (!m) continue;
   const c = block(parseBlk(readFileSync(join(hkDir, f), 'utf8')), 'controls');
   if (!c) continue;
-  const hotkeys = {};
-  for (const e of block(c, 'hotkeys')?.entries ?? []) {
-    if (!e.block) continue;
-    const inputs = e.block.entries.filter((x) => KINDS[x.k]).map((x) => ({ kind: KINDS[x.k], code: x.v }));
-    (hotkeys[e.k] ??= []);
-    if (inputs.length) hotkeys[e.k].push({ inputs });
-  }
-  const axes = {};
-  for (const e of block(c, 'axes')?.entries ?? []) {
-    if (!e.block) continue;
-    axes[e.k] = { axisId: value(e.block, 'axisId', null), mouseAxisId: value(e.block, 'mouseAxisId', null), inverse: value(e.block, 'inverse', false) };
-  }
-  const base = value(block(c, 'basePresetPaths'), 'default', null);
-  presets[m[1]] = { base: base ? presetName(base) : null, hotkeys, axes };
+  presets[m[1]] = { base: basePreset(c), hotkeys: Object.fromEntries(readHotkeys(c)), axes: readAxes(c) };
 }
-writeFileSync(join(out, 'presets.json'), JSON.stringify(presets));
+if (Object.keys(presets).length < 5) fail(`only ${Object.keys(presets).length} presets found in ${hkDir}`);
 console.log('presets:', Object.keys(presets).length);
 
 // ---- localized names -----------------------------------------------------------------
@@ -64,15 +50,18 @@ const items = [];
 const seen = new Set();
 const pretty = (id) => id.replace(/^ID_/, '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 
+const perFile = {};
 for (const [file, tab] of Object.entries(GROUPS)) {
   const txt = readFileSync(join(dir, `shortcutsgroup${file}.nut`), 'utf8');
   // top-level items are indented exactly two spaces: "  {" ... "  }"
   const parts = txt.split(/\r?\n  \{\r?\n/).slice(1);
+  let recognised = 0;   // entries whose id could be read at all (before types are filtered and repeats dropped)
   let section = '';
   for (const raw of parts) {
     const body = raw.split(/\r?\n  \}/)[0];
     const id = body.match(/^\s*id = "(\w+)"/)?.[1];
     if (!id) continue;
+    recognised++;
     const type = body.match(/type = CONTROL_TYPE\.(\w+)/)?.[1];
     if (type === 'SECTION' || type === 'HEADER') { section = names[`hotkeys/${id}`] ?? pretty(id.replace(/_HEADER$/, '')); continue; }
     if (type === 'AXIS') {
@@ -102,7 +91,15 @@ for (const [file, tab] of Object.entries(GROUPS)) {
       optional: /checkAssign\s*=\s*false/.test(body),
     });
   }
+  perFile[file] = recognised;
 }
+// The scripts are read by their shape (indentation, `id = "..."`), not parsed. If a game update changes that shape, a file yields
+// no entries at all or the total collapses; better to stop here than to ship a catalog with a layer missing.
+// (Entries are counted as read, not as kept: a group may legitimately add nothing new because another group listed the same ids.)
+const empty = Object.entries(perFile).filter(([, n]) => n === 0).map(([f]) => f);
+if (empty.length) fail(`nothing could be read from these shortcut groups: ${empty.join(', ')}. The .nut layout has probably changed.`);
+if (items.length < 400) fail(`only ${items.length} shortcuts found (expected 800 or so). The .nut layout has probably changed.`);
+if (Object.keys(names).length < 500) fail(`only ${Object.keys(names).length} names read from controls.csv`);
 // ---- re-file: infantry gets its own tab; drone control becomes ground/naval sub-overlays -------------
 for (const it of items) {
   if (it.tab === 'common' && /^Spectator/i.test(it.section)) { it.tab = 'spectator'; it.sub = 'Replay / Spectator'; }
@@ -112,6 +109,8 @@ for (const it of items) {
   } else if (it.tab === 'common' && /_HUMAN$|^human_/.test(it.id)) { it.tab = 'infantry'; it.sub = 'Infantry'; }
   else if (it.tab === 'ground' && it.section === 'Scout UAV') { it.tab = 'drone'; it.droneFor = ['ground']; it.sub = 'Drone'; }
 }
+mkdirSync(out, { recursive: true });
+writeFileSync(join(out, 'presets.json'), JSON.stringify(presets));
 writeFileSync(join(out, 'catalog.json'), JSON.stringify({ items }));
 const by = {}; items.forEach((i) => (by[i.tab] = (by[i.tab] ?? 0) + 1));
 console.log('catalog items:', items.length, by);

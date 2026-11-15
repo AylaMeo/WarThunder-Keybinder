@@ -14,3 +14,4 @@ config.json
 ui.json
 mouse-layout.json
 labels.json
+*.json.tmp

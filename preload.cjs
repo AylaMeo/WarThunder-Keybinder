@@ -6,9 +6,8 @@ contextBridge.exposeInMainWorld('kbHost', {
   setClickThrough: (on) => ipcRenderer.send('kb:clickThrough', !!on),
   setTransparent: (on) => ipcRenderer.send('kb:transparent', !!on),
   setOpacity: (v) => ipcRenderer.send('kb:opacity', Number(v)),
-  setOverlayHotkey: (accel) => ipcRenderer.send('kb:overlayKey', String(accel)),
+  setHotkey: (name, accel) => ipcRenderer.send('kb:hotkey', String(name), String(accel)),   // accel '' = switch that hotkey off
   reportOverlay: (on) => ipcRenderer.send('kb:overlayState', !!on),
-  resize: (w, h) => ipcRenderer.send('kb:resize', Number(w), Number(h)),
   applyOverlayBounds: () => ipcRenderer.send('kb:applyOverlayBounds'),
   saveOverlayBounds: () => ipcRenderer.send('kb:saveOverlayBounds'),
   resetOverlayBounds: () => ipcRenderer.send('kb:resetOverlayBounds'),

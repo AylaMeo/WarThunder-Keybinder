@@ -17,9 +17,8 @@ let tray = null;
 let server = null;
 let port = 0;
 let quitting = false;
-let overlayOn = false;     // reported by the page; only used for the tray menu check mark
-let keyOk = true;
-const st = { onTop: false, clickThrough: false, opacity: 1, transparent: false, overlayKey: 'Control+Alt+O', ...loadState() };
+let overlayOn = false;     // reported by the page: tray menu check mark, and whether the window stays out of the taskbar
+const st = { onTop: false, clickThrough: false, opacity: 1, transparent: false, ...loadState() };
 
 // ---- icon (drawn in code so there is no asset to ship): a purple key-cap with a cyan dot --------------------------------
 function makeIcon(size = 32) {
@@ -42,13 +41,17 @@ function makeIcon(size = 32) {
 
 // Visible-on-screen check so a saved position from an unplugged monitor can't hide the window.
 function fitBounds(b) {
-  if (!b) return {};
+  if (!b || ![b.width, b.height].every((n) => Number.isFinite(n) && n > 0)) return {};   // nothing saved (or a damaged window.json): use the defaults
+  if (![b.x, b.y].every(Number.isFinite)) return { width: b.width, height: b.height };
   const ok = screen.getAllDisplays().some((d) => b.x >= d.bounds.x - 50 && b.y >= d.bounds.y - 50 && b.x < d.bounds.x + d.bounds.width - 100 && b.y < d.bounds.y + d.bounds.height - 100);
   return ok ? b : { width: b.width, height: b.height };
 }
 
-function pushState() {
-  win?.webContents.send('kb:state', { onTop: st.onTop, clickThrough: st.clickThrough, opacity: st.opacity, transparent: st.transparent, overlayKey: st.overlayKey, overlayKeyOk: keyOk, overlayBounds: st.overlayBounds ?? null });
+/** Tell the page the window state. `keyFailed` = a hotkey change that was just refused ({ name, accel, why }), shown once. */
+function pushState(keyFailed = null) {
+  if (!win || win.isDestroyed()) return;
+  const keys = Object.fromEntries(Object.keys(HOTKEYS).map((n) => [n, { accel: st.keys[n], ok: !st.keys[n] || keyOk[n] === true }]));
+  win.webContents.send('kb:state', { onTop: st.onTop, clickThrough: st.clickThrough, opacity: st.opacity, transparent: st.transparent, keys, keyFailed, overlayBounds: st.overlayBounds ?? null });
 }
 
 // ---- window ------------------------------------------------------------------------------------------------------------
@@ -62,6 +65,7 @@ function createWindow() {
     transparent: st.transparent, hasShadow: !st.transparent,
     backgroundColor: st.transparent ? '#00000000' : '#05040f',
     alwaysOnTop: st.onTop, opacity: st.opacity,
+    skipTaskbar: overlayOn,   // the window is re-created when transparency changes: an overlay must stay out of the taskbar across that
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   win = w;
@@ -69,7 +73,7 @@ function createWindow() {
   if (st.onTop) w.setAlwaysOnTop(true, 'screen-saver');
   if (st.clickThrough) w.setIgnoreMouseEvents(true, { forward: true });
   w.loadURL(`http://127.0.0.1:${port}/`);
-  w.webContents.on('did-finish-load', pushState);
+  w.webContents.on('did-finish-load', () => pushState());
   // closing hides to the tray (the app keeps running); only "Quit" really exits
   w.on('close', (e) => {
     if (!w.isMinimized()) st.bounds = w.getBounds();
@@ -95,7 +99,13 @@ function toggleWindow() {
 /** Overlay mode lives in the page (it changes layout); the shell just asks the page to flip it, showing the window first. */
 function toggleOverlay() {
   showWindow();
-  win.webContents.send('kb:command', 'overlay');
+  sendCommand('overlay');
+}
+/** Ask the page to do something. A window that is still loading gets the command as soon as its page is up. */
+function sendCommand(cmd) {
+  if (!win || win.isDestroyed()) return;
+  const wc = win.webContents;
+  if (wc.isLoading()) wc.once('did-finish-load', () => wc.send('kb:command', cmd)); else wc.send('kb:command', cmd);
 }
 
 function setOnTop(on) { st.onTop = !!on; win?.setAlwaysOnTop(st.onTop, 'screen-saver'); saveState(st); pushState(); rebuildMenu(); }
@@ -114,28 +124,71 @@ function setTransparent(on) {
 }
 
 // ---- hotkeys -------------------------------------------------------------------------------------------------------------
-const MODS = new Set(['Control', 'Alt', 'Shift', 'Super']);
-const validAccel = (a) => {
-  if (typeof a !== 'string') return false;
+// Global shortcuts work while the game has focus, which also means the game never sees these combinations. Each one can be
+// changed or switched off ('' = off) in Settings > Hotkeys; the choice is kept in window.json.
+const HOTKEYS = {
+  overlay: { dflt: 'Control+Alt+O', run: () => toggleOverlay() },
+  window: { dflt: 'Control+Alt+K', run: () => toggleWindow() },
+  clickThrough: { dflt: 'Control+Alt+L', run: () => setClickThrough(!st.clickThrough) },
+  compact: { dflt: 'Control+Alt+M', run: () => sendCommand('compact') },
+};
+const keyOk = {};   // name -> is the shortcut registered with Windows right now
+const MOD_ORDER = ['Control', 'Alt', 'Shift', 'Super'];
+/** A usable accelerator in one fixed spelling ("Control+Alt+O"), or null. Needs Ctrl, Alt or Win: Shift alone would swallow typing. */
+function normAccel(a) {
+  if (typeof a !== 'string') return null;
   const parts = a.split('+');
   const key = parts.pop();
-  return parts.length >= 1 && parts.every((p) => MODS.has(p)) && /^([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Space|Up|Down|Left|Right|Home|End|PageUp|PageDown|Insert|Delete|Tab|Enter)$/.test(key);
-};
-function registerOverlayKey(accel) {
-  if (st.overlayKey) globalShortcut.unregister(st.overlayKey);
-  let ok = false;
-  try { ok = globalShortcut.register(accel, toggleOverlay); } catch { ok = false; }
-  keyOk = ok;
-  if (ok) st.overlayKey = accel;
-  else if (st.overlayKey && st.overlayKey !== accel) { try { globalShortcut.register(st.overlayKey, toggleOverlay); } catch { /* keep going */ } }
-  saveState(st); pushState(); rebuildMenu();
-  return ok;
+  if (!/^([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Space|Up|Down|Left|Right|Home|End|PageUp|PageDown|Insert|Delete|Tab|Enter)$/.test(key)) return null;
+  const mods = new Set(parts);
+  if (mods.size !== parts.length || ![...mods].every((m) => MOD_ORDER.includes(m)) || ![...mods].some((m) => m !== 'Shift')) return null;
+  return [...MOD_ORDER.filter((m) => mods.has(m)), key].join('+');
+}
+const tryRegister = (accel, run) => { try { return globalShortcut.register(accel, run); } catch { return false; } };
+/** Read the saved hotkeys (and the older single `overlayKey` setting), dropping anything unusable or duplicated. */
+function loadHotkeys() {
+  const saved = st.keys && typeof st.keys === 'object' ? st.keys : {};
+  const used = new Set();
+  st.keys = {};
+  for (const [name, h] of Object.entries(HOTKEYS)) {
+    const raw = Object.hasOwn(saved, name) ? saved[name] : name === 'overlay' && st.overlayKey ? st.overlayKey : h.dflt;
+    let accel = raw === '' ? '' : normAccel(raw) ?? h.dflt;
+    if (accel && used.has(accel)) accel = '';
+    if (accel) used.add(accel);
+    st.keys[name] = accel;
+  }
+  delete st.overlayKey;
+}
+loadHotkeys();
+function registerHotkeys() {
+  for (const [name, h] of Object.entries(HOTKEYS)) keyOk[name] = !!st.keys[name] && tryRegister(st.keys[name], h.run);
+}
+/** Change one hotkey ('' switches it off). If the new one can't be had, the old one stays active and the page is told why. */
+function setHotkey(name, raw) {
+  const h = Object.hasOwn(HOTKEYS, name) ? HOTKEYS[name] : null;
+  const accel = raw === '' ? '' : normAccel(raw);
+  if (!h || accel == null) return;
+  const prev = st.keys[name];
+  let failed = null;
+  if (accel !== prev) {
+    if (accel && Object.entries(st.keys).some(([n, a]) => n !== name && a === accel)) failed = { name, accel, why: 'duplicate' };
+    else {
+      if (prev && keyOk[name]) globalShortcut.unregister(prev);
+      if (!accel || tryRegister(accel, h.run)) { st.keys[name] = accel; keyOk[name] = !!accel; }
+      else {
+        failed = { name, accel, why: 'taken' };
+        keyOk[name] = !!prev && tryRegister(prev, h.run);   // put the previous one back; its status is reported as it really is
+      }
+    }
+  } else if (accel && !keyOk[name]) keyOk[name] = tryRegister(accel, h.run);   // same key again: one more try (the other app may have let go)
+  saveState(st); pushState(failed); rebuildMenu();
 }
 
 // ---- tray ----------------------------------------------------------------------------------------------------------------
 function rebuildMenu() {
   if (!tray) return;
-  const nice = st.overlayKey.replace('Control', 'Ctrl').replace('Super', 'Win');
+  const nice = st.keys.overlay ? st.keys.overlay.replace('Control', 'Ctrl').replace('Super', 'Win') : 'off';
+  const keyOkNow = !st.keys.overlay || keyOk.overlay;
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Show / hide window', click: toggleWindow, accelerator: undefined },
     { label: 'Overlay mode', type: 'checkbox', checked: overlayOn, click: toggleOverlay },
@@ -143,10 +196,10 @@ function rebuildMenu() {
     { label: 'Always on top', type: 'checkbox', checked: st.onTop, click: (i) => setOnTop(i.checked) },
     { label: 'Click-through', type: 'checkbox', checked: st.clickThrough, click: (i) => setClickThrough(i.checked) },
     { type: 'separator' },
-    { label: `Overlay hotkey: ${nice}${keyOk ? '' : ' (unavailable)'}`, enabled: false },
+    { label: `Overlay hotkey: ${nice}${keyOkNow ? '' : ' (unavailable)'}`, enabled: false },
     { label: 'Quit', click: () => { quitting = true; app.quit(); } },
   ]));
-  tray.setToolTip(`War Thunder Keybinder - click to ${overlayOn ? 'leave' : 'enter'} overlay (${nice})`);
+  tray.setToolTip(`War Thunder Keybinder - click to ${overlayOn ? 'leave' : 'enter'} overlay${st.keys.overlay ? ` (${nice})` : ''}`);
 }
 
 ipcMain.on('kb:alwaysOnTop', (_e, on) => setOnTop(on));
@@ -155,13 +208,12 @@ ipcMain.on('kb:transparent', (_e, on) => setTransparent(on));
 ipcMain.on('kb:opacity', (_e, v) => { st.opacity = Math.min(1, Math.max(0.35, Number(v) || 1)); win?.setOpacity(st.opacity); saveState(st); pushState(); });
 ipcMain.on('kb:minimize', () => win?.minimize());
 ipcMain.on('kb:close', () => win?.close());          // hides to the tray
-ipcMain.on('kb:resize', (_e, w, h) => { if (win) win.setSize(Math.round(w), Math.round(h)); });
 
 // Overlay position and size (chosen in Settings > Set up). Used every time overlay mode turns on.
 ipcMain.on('kb:applyOverlayBounds', () => {
   if (!win) return;
-  const b = st.overlayBounds ? fitBounds(st.overlayBounds) : { width: 880, height: 600 };   // fitBounds drops x/y if that spot is no longer on a screen
-  if ('x' in b) win.setBounds(b); else win.setSize(b.width, b.height);
+  const b = { width: 880, height: 600, ...fitBounds(st.overlayBounds) };   // fitBounds drops x/y if that spot is no longer on a screen
+  if ('x' in b) win.setBounds(b); else win.setSize(Math.round(b.width), Math.round(b.height));
 });
 ipcMain.on('kb:saveOverlayBounds', () => {
   if (!win) return;
@@ -180,9 +232,12 @@ ipcMain.on('kb:overlayState', (_e, on) => {
   saveState(st);
   rebuildMenu();
 });
-ipcMain.on('kb:overlayKey', (_e, accel) => { if (validAccel(accel)) registerOverlayKey(accel); });
+ipcMain.on('kb:hotkey', (_e, name, accel) => setHotkey(String(name), typeof accel === 'string' ? accel : null));
 
 app.whenReady().then(async () => {
+  // The packaged app keeps its settings in the user-data folder (%APPDATA%\wt-keybinder), not inside its own program folder:
+  // that folder may be read-only, and it is replaced on every rebuild. Run from source, settings stay in the project folder.
+  if (app.isPackaged && !process.env.WTKB_DATA_DIR) process.env.WTKB_DATA_DIR = app.getPath('userData');
   const { createServer } = await import(pathToFileURL(path.join(__dirname, 'server.mjs')).href);
   server = createServer();
   // Loopback only. A fixed port keeps the page's origin steady between launches; fall back to any free port.
@@ -195,13 +250,8 @@ app.whenReady().then(async () => {
   tray = new Tray(makeIcon(32));
   tray.on('click', toggleOverlay);            // left click: overlay on/off
   tray.on('double-click', showWindow);
+  registerHotkeys();
   createWindow();
-  if (!validAccel(st.overlayKey)) st.overlayKey = 'Control+Alt+O';
-  registerOverlayKey(st.overlayKey);
-  // Global hotkeys work while the game has focus.
-  globalShortcut.register('Control+Alt+K', toggleWindow);
-  globalShortcut.register('Control+Alt+L', () => setClickThrough(!st.clickThrough));
-  globalShortcut.register('Control+Alt+M', () => win?.webContents.send('kb:command', 'compact'));
   rebuildMenu();
 });
 app.on('second-instance', showWindow);

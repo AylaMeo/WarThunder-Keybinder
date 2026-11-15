@@ -8,9 +8,10 @@
   "scripts": {
     "start": "node server.mjs",
     "app": "electron .",
-    "build-data": "node tools/build-data.mjs"
+    "build-data": "node tools/build-data.mjs",
+    "test": "node --test"
   },
-  "engines": { "node": ">=22.5" },
+  "engines": { "node": ">=22.13" },
   "devDependencies": {
     "electron": "^45.3.2"
   }

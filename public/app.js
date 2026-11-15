@@ -6,12 +6,33 @@ const LAYERS = [['air', 'Air'], ['heli', 'Helicopter'], ['ground', 'Ground'], ['
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uniq = (a) => [...new Set(a)];
+const SIZES = [50, 60, 70, 80, 90, 100, 110, 125, 150, 175, 200];   // the panel sizes offered in Settings > View (percent)
+const SIZE_MIN = 40, SIZE_MAX = 250;                                // what a hand-edited ui.json may hold
 const DEVS = ['Azeron', 'Keyboard', 'Mouse'];   // device panels, left to right. Each has: ui.show<D>, ui.overlay<D>, buttons show<D> / setup<D> / overlay<D>
 
 const ui = (() => { try { return JSON.parse(localStorage.getItem('wtkb-ui') ?? '{}'); } catch { return {}; } })();
 // View settings are kept in the browser AND on the server (ui.json): the desktop window changes port / is recreated, which would lose localStorage.
 let uiTimer = null;
 const postUi = () => fetch('/api/ui', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(ui) }).catch(() => {});
+/** POST a change to the server. Returns true when it was saved; otherwise says so in the warning bar (what = "save the label"). */
+let clientWarn = '';   // a failed save / load, shown in the warning bar next to the server's own warnings until the next one works
+function showWarn() {
+  const all = [...(S?.warnings ?? []), ...(clientWarn ? [clientWarn] : [])];
+  const w = $('warn');
+  w.hidden = !all.length;
+  w.textContent = all.join('  |  ');
+}
+async function post(url, body, what) {
+  let msg;
+  try {
+    const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    if (r.ok) { clientWarn = ''; showWarn(); return true; }
+    msg = (await r.json().catch(() => ({}))).error ?? `error ${r.status}`;
+  } catch { msg = 'the app is not answering'; }
+  clientWarn = `Could not ${what}: ${msg}`;
+  showWarn();
+  return false;
+}
 const saveUi = () => {
   try { localStorage.setItem('wtkb-ui', JSON.stringify(ui)); } catch { /* storage blocked */ }
   clearTimeout(uiTimer); uiTimer = setTimeout(postUi, 150);
@@ -22,6 +43,12 @@ function uiDefaults() {
   ui.tab ??= 'air'; ui.common ??= true; ui.drone ??= false; ui.hideOptional ??= false; ui.compact ??= false;
   for (const d of DEVS) ui[`show${d}`] ??= true;       // each device panel (Azeron / Keyboard / Mouse) can be shown or hidden
   ui.overlayKeyboard ??= false;                        // the big keyboard is off in overlay mode unless you turn it on
+  if (ui.kbSize !== 'fit') ui.kbSize = 'azeron';       // keyboard keys: 'azeron' = as big as the Azeron's keys, 'fit' = small, so the whole board fits the window
+  for (const d of DEVS) {                              // size of each device panel in percent (keys, spacing and text together); 100 = the same key size on all three
+    const v = Number(ui[`size${d}`]);
+    ui[`size${d}`] = Number.isFinite(v) && v > 0 ? Math.max(SIZE_MIN, Math.min(SIZE_MAX, Math.round(v))) : 100;
+  }
+  if (ui.deviceFlow !== 'row') ui.deviceFlow = 'wrap'; // device panels: 'wrap' = stacked (a panel that doesn't fit moves down), 'row' = side by side, scrolling sideways
   ui.showLeft ??= true; ui.showRight ??= true;
   if (!TABS.some(([k]) => k === ui.tab)) ui.tab = 'air';
   if (new URLSearchParams(location.search).get('mini')) ui.compact = true;
@@ -32,7 +59,7 @@ let S = null;          // last state from the server
 let stamp = null;
 let selected = null;   // { dev:'az'|'ms', key }
 let hlItem = null;     // action highlighted from a sidebar row
-let draft = null;      // mouse layout being edited (null = not editing)
+let draft = null;      // working copy of the mouse layout while Settings is open (null = Settings is closed)
 let flash = new Set(); // "az:22" / "ms:lmb" cards highlighted from a sidebar notification (temporary)
 let flashTimer = null;
 let live = { status: 'idle', joy: 0, vks: [] };  // physical input state streamed by /api/live
@@ -58,12 +85,18 @@ const inCore = (it) => it.tab === ui.tab
 /** Is this game action part of what the current view shows? (core + the extra layers) */
 const inSet = (it) => inCore(it) || isExtra(it.tab);
 const axisShown = (a) => a.tab === ui.tab || (ui.common && a.tab === 'common') || (droneOn() && a.tab === 'drone') || isExtra(a.tab);
-/** Custom-label layers consulted for the current view, most specific first. */
-const labelLayers = () => [ui.tab, ...(droneOn() ? [`${ui.tab}-drone`] : []), ...(ui.common ? ['common'] : []), ...extras(), ...throughLayers()];
-function labelFor(dev, key) {
+/** Custom-label layers consulted for a card in the current view, most specific first: this layer, its drone overlay, Common.
+ *  Another layer's label is used only where that layer is what the card is showing (a key shown through / "always" from it),
+ *  never on a key that is bound on this layer itself. `c` = the card (optional). */
+function labelLayers(c) {
+  const out = [ui.tab, ...(droneOn() ? [`${ui.tab}-drone`] : []), ...(ui.common ? ['common'] : [])];
+  if (c?.list?.length && !c.list.some((e) => inCore(e.item))) out.push(...uniq(c.list.map((e) => e.item.tab)).filter((t) => ALL_LAYERS.includes(t)));
+  return uniq(out);
+}
+function labelFor(dev, key, c) {
   const L = S.labels?.[dev]?.[key];
   if (!L) return null;
-  for (const l of labelLayers()) if (L[l]) return { text: L[l], layer: l };
+  for (const l of labelLayers(c)) if (Object.hasOwn(L, l) && L[l]) return { text: L[l], layer: l };
   return null;
 }
 
@@ -118,28 +151,40 @@ function deviceCards() {
     out.kb.push({ dev: 'kb', key, cell, k: { ident: cell.l }, entries, modEntries, sig: input, ...c });
   }
 
+  // The wheel can be an axis (scrolling: mouse axes 2+ are the game's per-vehicle wheel slots) or up/down buttons (WT mouse 5/6).
+  const wheelAxes = S.axes.filter((a) => a.mouseAxisId != null && a.mouseAxisId >= 2 && axisShown(a));
+
+  /** What the game has bound to one Azeron function (a key's press, long press or double press): { sig, entries, modEntries }. */
+  const lookup = (f) => {
+    const plain = (sig) => ({ sig, entries: trig.get(sig) ?? [], modEntries: mods.get(sig) ?? [] });
+    if (f.kind === 'joy') return plain(`joy:${f.joyCode}`);
+    if (f.kind === 'mouse') return plain(`mouse:${f.mouse}`);
+    if (f.kind === 'wheel') return plain(`mouse:${f.wheel === 'up' ? 5 : 6}`);
+    if (f.kind === 'key' && f.key.code != null) {
+      const own = `key:${f.key.code}`;
+      if (!f.key.mods.length) return plain(own);
+      // Azeron sends modifier + key together, so only that exact chord counts
+      const sig = [...f.key.mods.map((m) => `key:${m}`), own].join('+');
+      return { sig, entries: bySig.get(sig) ?? [], modEntries: [] };
+    }
+    return { sig: null, entries: [], modEntries: [] };
+  };
   for (const cell of S.layouts.azeron.cells) {
     const k = azKeys[cell.id] ?? { id: cell.id, kind: 'none', ident: '', assigned: false };
-    let entries = [], modEntries = [];
-    if (k.kind === 'joy') {
-      entries = trig.get(`joy:${k.joyCode}`) ?? [];
-      modEntries = mods.get(`joy:${k.joyCode}`) ?? [];
-    } else if (k.kind === 'key' && k.key.code != null) {
-      const own = `key:${k.key.code}`;
-      // Azeron sends modifier + key together, so only that exact chord counts
-      entries = k.key.mods.length ? bySig.get([...k.key.mods.map((m) => `key:${m}`), own].join('+')) ?? [] : trig.get(own) ?? [];
-      modEntries = k.key.mods.length ? [] : mods.get(own) ?? [];
-    }
+    const { sig, entries, modEntries } = lookup(k);
     // thumb-pad direction keys send a hat direction; War Thunder's config has no hat binds, so they show as "not bound in game"
-    const c = classify(entries, k.assigned && (k.kind === 'joy' || k.kind === 'key' || k.kind === 'dir'));
+    const c = classify(entries, k.assigned && ['joy', 'key', 'dir', 'mouse', 'wheel'].includes(k.kind));
     if (c.cls === 'unbound' && modEntries.some((e) => inSet(e.item))) c.cls = 'bound'; // used only as a modifier
-    const sig = k.kind === 'joy' ? `joy:${k.joyCode}` : k.kind === 'key' && k.key.code != null ? [...k.key.mods, k.key.code].map((m) => `key:${m}`).join('+') : null;
-    out.az.push({ dev: 'az', key: cell.id, cell, k, entries, modEntries, sig, ...c });
+    // a key that turns the mouse wheel: where this layer uses the wheel as an axis and has nothing on wheel up/down, it drives that
+    let wheelUse = null;
+    if (k.kind === 'wheel' && wheelAxes.length && !['bound', 'common'].includes(c.cls)) { wheelUse = wheelAxes; c.cls = 'bound'; c.list = []; }
+    // a function the game cannot bind as such (macro, Xbox button, profile switch, ...): shown for what it is, never as "unbound"
+    if (k.kind === 'other') c.cls = 'special';
+    const alt = (k.alt ?? []).map((a) => ({ ...a, ...lookup(a) }));   // what a long press / double press does, with its own binds
+    out.az.push({ dev: 'az', key: cell.id, cell, k, entries, modEntries, sig, wheelAxes: wheelUse, alt, ...c });
   }
 
-  // The wheel can be an axis (scrolling: mouse axes 2+ are the game's per-vehicle wheel slots) or up/down buttons (WT mouse 5/6).
-  // When this layer uses it as an axis and nothing is bound to wheel up/down, show ONE "Scroll wheel" card instead of two.
-  const wheelAxes = S.axes.filter((a) => a.mouseAxisId != null && a.mouseAxisId >= 2 && axisShown(a));
+  // On the mouse panel: when this layer uses the wheel as an axis and nothing is bound to wheel up/down, show ONE "Scroll wheel" card instead of two.
   const wheelCells = S.g502.cells.filter((c) => c.mouse === 5 || c.mouse === 6);
   const wheelButtonsUsed = wheelCells.some((c) => [...(trig.get(`mouse:${c.mouse}`) ?? []), ...(mods.get(`mouse:${c.mouse}`) ?? [])].some((e) => inSet(e.item)));
   const mergeWheel = wheelAxes.length > 0 && !wheelButtonsUsed && wheelCells.length > 0;
@@ -165,7 +210,10 @@ function deviceCards() {
 // ---------------------------------------------------------------- live input (press a key, its card lights up)
 function liveSpec() {
   const vks = new Set();
-  for (const k of Object.values(S.azeron?.keys ?? {})) if (k.kind === 'key') { if (k.key.vk) vks.add(k.key.vk); if (k.key.modVk) vks.add(k.key.modVk); }
+  for (const k of Object.values(S.azeron?.keys ?? {})) {
+    if (k.kind === 'key') { if (k.key.vk) vks.add(k.key.vk); if (k.key.modVk) vks.add(k.key.modVk); }
+    else if (k.kind === 'mouse' && k.vk) vks.add(k.vk);
+  }
   for (const c of S.g502.cells) if (c.vk) vks.add(c.vk);
   const [vid, pid] = (S.azeron?.device?.devId ?? '').toLowerCase().split(':');
   return { vid: vid ?? '', pid: pid ?? '', vks: [...vks].sort((a, b) => a - b) };
@@ -177,7 +225,7 @@ function startLive() {
   liveSrc?.close();
   liveSig = sig;
   liveSrc = new EventSource(`/api/live?vid=${spec.vid}&pid=${spec.pid}&vks=${spec.vks.join(',')}`);
-  liveSrc.onmessage = (e) => { live = JSON.parse(e.data); updateLive(); };
+  liveSrc.onmessage = (e) => { live = JSON.parse(e.data); updateLive(true); };
 }
 // ---- analog stick axes -------------------------------------------------------------
 // Windows' joystick API reports X,Y,Z,R,U,V. The game/DirectInput order is X,Y,Z,Rx,Ry,Rz, so by default
@@ -215,17 +263,20 @@ function stickCalibrationStep() {
     cal = null;
     calText = 'Calibrated. Let go of the stick.';
     S.config.stickCal = JSON.stringify(saved);
-    fetch('/api/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stickCal: S.config.stickCal }) });
+    post('/api/config', { stickCal: S.config.stickCal }, 'save the calibration');
   }
   showCalText();
 }
 
-function updateLive() {
+/** Put the live input state on the cards. `fresh` = called for a new message from the helper (not just a re-render). */
+function updateLive(fresh = false) {
+  if (!S) return;
   const down = new Set(live.vks);
   const next = new Set();
   for (const k of Object.values(S?.azeron?.keys ?? {})) {
     if (k.kind === 'joy' && k.joyBtn <= 32 && ((live.joy >>> (k.joyBtn - 1)) & 1)) next.add(`az:${k.id}`);
     else if (k.kind === 'key' && k.key.vk && down.has(k.key.vk) && (!k.key.modVk || down.has(k.key.modVk))) next.add(`az:${k.id}`);
+    else if (k.kind === 'mouse' && k.vk && down.has(k.vk)) next.add(`az:${k.id}`);
   }
   for (const c of S?.g502.cells ?? []) if (c.vk && down.has(c.vk)) next.add(`ms:${c.id}`);
 
@@ -243,7 +294,7 @@ function updateLive() {
   const stick = S?.layouts.azeron.cells.find((c) => c.stick);
   let sx = 0, sy = 0;
   if (stick) {
-    stickCalibrationStep();
+    if (fresh) stickCalibrationStep();
     const c = stickCal();
     {
       const d = (i, b) => (live.axes?.[i] != null ? (live.axes[i] - b) / 32767 : 0);
@@ -275,37 +326,52 @@ function actsHtml(list, extraClass = '', prefix = '') {
   return `<div class="acts${extraClass}">${prefix}${shown.map(esc).join('<br>')}${more > 0 ? `<br>+${more} more` : ''}</div>`;
 }
 
+/** "modifier xN": how many binds IN THE CURRENT VIEW use this input as the held part of a chord. */
+const modCount = (c) => c.modEntries.filter((e) => inSet(e.item)).length;
+const modHtml = (c) => { const n = modCount(c); return n ? `<div class="mod">modifier &times;${n}</div>` : ''; };
+
 function cardBody(c) {
-  const lab = labelFor(c.dev, c.key);
+  const lab = labelFor(c.dev, c.key, c);
   const other = c.cls === 'through' ? '<span class="sub">other: </span>' : '';   // (the layers are listed in the tooltip and the details)
   let html = '';
   if (lab) {
     html += `<div class="lab" title="${esc(lab.layer)} label">${esc(lab.text)}</div>`;
     if (c.list.length) html += `<div class="acts small">${other}${esc(actNames(c.list).slice(0, 2).join(' / '))}${actNames(c.list).length > 2 ? ' +' : ''}</div>`;
   } else if (c.list.length) html += actsHtml(c.list, c.list.length > 2 ? ' more' : '', other);
+  else if (c.wheelAxes?.length) html += `<div class="acts${c.wheelAxes.length > 2 ? ' more' : ''}">${c.wheelAxes.slice(0, 3).map((a) => esc(axisName(a.name))).join('<br>')}${c.wheelAxes.length > 3 ? `<br>+${c.wheelAxes.length - 3} more` : ''}</div>`;
+  else if (c.cls === 'special') html += '<div class="acts small">Azeron function</div>';
   else if (c.cls === 'unbound') html += '<div class="acts">not bound in game</div>';
-  if (c.modEntries.length) html += `<div class="mod">modifier &times;${c.modEntries.length}</div>`;
-  return html;
+  return html + modHtml(c) + altHtml(c);
 }
+/** A key's long-press / double-press function, as one short line each ("hold: Q", "2x: Macro"). */
+const altHtml = (c) => (c.alt ?? []).map((a) => `<div class="mod alt">${a.press === 'long' ? 'hold' : '2&times;'}: ${esc(a.ident)}</div>`).join('');
+const altName = (a) => (a.press === 'long' ? 'Long press' : 'Double press');
 
 function tip(c) {
-  const lines = c.entries.map((e) => `${TAB_NAME[e.item.tab]}: ${e.item.name}${e.bind.inputs.length > 1 ? ' (' + e.bind.text + ')' : ''}`);
+  const line = (e) => `${TAB_NAME[e.item.tab]}: ${e.item.name}${e.bind.inputs.length > 1 ? ' (' + e.bind.text + ')' : ''}`;
+  const lines = c.entries.map(line);
+  if (c.wheelAxes?.length) lines.push(`Scroll wheel (axis): ${c.wheelAxes.map((a) => axisName(a.name)).join(', ')}`);
+  if (c.cls === 'special') lines.push(`${c.k.ident}: an Azeron function, not something the game binds`);
+  for (const a of c.alt ?? []) lines.push(`${altName(a)} (${a.ident}): ${a.entries.map(line).join('; ') || (a.kind === 'other' ? 'an Azeron function' : 'nothing bound in game')}`);
   if (c.dev === 'kb') return lines.join('\n') || c.cell.tip || 'Nothing bound in game';
   return lines.join('\n') || (c.cls === 'empty' ? 'Not assigned' : 'Nothing bound');
 }
 
 // ---------------------------------------------------------------- keyboard rendering
 function keyBody(c) {
-  const lab = labelFor('kb', c.key);
+  const lab = labelFor('kb', c.key, c);
   let html = '';
   if (lab) html += `<div class="lab" title="${esc(lab.layer)} label">${esc(lab.text)}</div>`;
   else if (c.list.length) {
     const names = actNames(c.list);
     html += `<div class="acts">${c.cls === 'through' ? '<span class="sub">other: </span>' : ''}${esc(names[0])}${names.length > 1 ? ` +${names.length - 1}` : ''}</div>`;
   }
-  if (c.modEntries.length) html += `<div class="mod">modifier &times;${c.modEntries.length}</div>`;
-  return html;
+  return html + modHtml(c);
 }
+
+/** Keyboard keys drawn as big as the Azeron's keys (Settings > Keyboard > Key size)? The overlay is a small fixed window, so
+ *  there the board always shrinks to fit. */
+const kbBig = () => ui.kbSize !== 'fit' && !ui.overlayMode;
 
 function renderKeyboard(cards) {
   const L = S.layouts.keyboard;
@@ -313,13 +379,14 @@ function renderKeyboard(cards) {
   el.style.setProperty('--kw', L.w);
   el.style.setProperty('--kh', L.h);
   $('kbName').textContent = `· ${L.name}`;
-  const at = (c) => `left:calc(var(--ku) * ${c.x});top:calc(var(--ku) * ${c.y});width:calc(var(--ku) * ${c.w} - 3px);height:calc(var(--ku) * ${c.h} - 3px);margin:1.5px`;
-  const decor = (L.decor ?? []).map((d) => `<div class="kdecor ${esc(d.kind)}" style="${at(d)}">${esc(d.label)}</div>`).join('');
-  el.innerHTML = decor + cards.map((c) => {
+  // --ku / --kv are one key unit across / down and --kgap the space between keys (style.css sets them for the chosen key size)
+  const at = (c) => `left:calc(var(--ku) * ${c.x});top:calc(var(--kv) * ${c.y});width:calc(var(--ku) * ${c.w} - var(--kgap));height:calc(var(--kv) * ${c.h} - var(--kgap));margin:calc(var(--kgap) / 2)`;
+  const body = kbBig() ? cardBody : keyBody;   // Azeron-sized keys have room for the same text as an Azeron card
+  el.innerHTML = cards.map((c) => {
     const sel = selected?.dev === 'kb' && String(selected.key) === String(c.key) ? ' sel' : '';
     const hl = (hlItem && c.entries.some((e) => e.item.id === hlItem) ? ' hl' : '') + (flash.has(`kb:${c.key}`) ? ' flash' : '') + ovHide(c);
     return `<button class="card kkey ${c.cls}${c.cell.keep ? ' keep' : ''}${sel}${hl}" style="${at(c.cell)}" data-dev="kb" data-key="${esc(c.key)}" title="${esc(tip(c))}">
-      <span class="ident">${esc(c.cell.l)}</span>${keyBody(c)}</button>`;
+      <span class="ident">${esc(c.cell.l)}</span>${body(c)}</button>`;
   }).join('');
 }
 
@@ -334,8 +401,8 @@ function renderAzeron(cards) {
     const sel = selected?.dev === 'az' && selected.key === cell.id ? ' sel' : '';
     const hl = (hlItem && c.entries.some((e) => e.item.id === hlItem) ? ' hl' : '') + (flash.has(`az:${cell.id}`) ? ' flash' : '') + (livePressed.has(`az:${cell.id}`) ? ' live' : '') + ovHide(c);
     if (cell.stick) return stickHtml(c, pos, sel + (livePressed.has(`az:${cell.id}`) ? ' live' : ''));
-    return `<button class="card ${c.cls}${sel}${hl}" style="${pos}" data-dev="az" data-key="${cell.id}" title="${esc(tip(c))}">
-      <span class="ident">${esc(k.ident)}</span>${cardBody(c)}<span class="id">#${cell.id}</span></button>`;
+    return `<button class="card ${c.cls}${sel}${hl}" style="${pos}" data-dev="az" data-key="${esc(cell.id)}" title="${esc(tip(c))}">
+      <span class="ident">${esc(k.ident)}</span>${cardBody(c)}<span class="id">#${esc(cell.id)}</span></button>`;
   }).join('');
 }
 
@@ -347,12 +414,14 @@ function stickHtml(c, pos, sel) {
     if (!axisShown(a)) continue;
     rows.push(`${esc(axisName(a.name))} &larr; axis ${a.axisId - dev.axesOffset + 1}${a.inverse ? ' (inv)' : ''}`);
   }
-  const lab = labelFor('az', c.cell.id);
-  return `<button class="card stick bound${sel}" style="${pos}" data-dev="az" data-key="${c.cell.id}" title="Analog stick: axes assigned in game for this layer">
+  const lab = labelFor('az', c.cell.id, c);
+  // the stick can be put in another mode in the Azeron software (keys, Xbox stick, mouse): then it is not the game's joystick axes
+  const mode = c.k.kind === 'other' ? `<span class="dim">Azeron mode: ${esc(c.k.ident)}</span>` : '';
+  return `<button class="card stick bound${sel}" style="${pos}" data-dev="az" data-key="${esc(c.cell.id)}" title="${mode ? esc(`Stick mode in the Azeron software: ${c.k.ident}`) : 'Analog stick: axes assigned in game for this layer'}">
     <span class="sname">Analog Joystick</span><div class="ring"><i></i></div>
     ${lab ? `<div class="lab">${esc(lab.text)}</div>` : ''}
-    <div class="axl">${rows.length ? rows.join('<br>') : '<span class="dim">no stick axes for this layer</span>'}</div>
-    <span class="id">#${c.cell.id}</span></button>`;
+    <div class="axl">${mode || (rows.length ? rows.join('<br>') : '<span class="dim">no stick axes for this layer</span>')}</div>
+    <span class="id">#${esc(c.cell.id)}</span></button>`;
 }
 const axisName = (n) => n.replace(/^(gm|ship|sub|submarine|human)_/, '').replace(/_/g, ' ');
 
@@ -362,21 +431,21 @@ function renderMouse(cards) {
   const rows = Math.max(1, ...S.g502.cells.map((c) => c.r + 1));
   g.style.gridTemplateColumns = `repeat(${cols}, var(--w))`;
   g.style.gridTemplateRows = `repeat(${rows}, var(--h))`;
-  $('mouseEditor').parentElement.style.setProperty('--mcols', cols);
+  document.querySelector('.device.mouse').style.setProperty('--mcols', cols);
   g.innerHTML = cards.map((c) => {
     const { cell } = c;
     const pos = `grid-column:${cell.c + 1};grid-row:${cell.r + 1}`;
     const sel = selected?.dev === 'ms' && selected.key === cell.id ? ' sel' : '';
     const hl = (hlItem && c.entries.some((e) => e.item.id === hlItem) ? ' hl' : '') + (flash.has(`ms:${cell.id}`) ? ' flash' : '') + (livePressed.has(`ms:${cell.id}`) ? ' live' : '') + ovHide(c);
     if (c.merged) {
-      const lab = labelFor('ms', cell.id);
+      const lab = labelFor('ms', cell.id, c);
       const body = (lab ? `<div class="lab">${esc(lab.text)}</div>` : '') + (c.wheelAxes.length
         ? `<div class="acts${lab ? ' small' : ''}">${c.wheelAxes.slice(0, 3).map((a) => esc(axisName(a.name))).join('<br>')}${c.wheelAxes.length > 3 ? `<br>+${c.wheelAxes.length - 3} more` : ''}</div>` : '');
       return `<button class="card ${c.cls}${sel}${hl}" style="${pos}" data-dev="ms" data-key="${esc(cell.id)}" title="Scroll wheel (axis): ${esc(c.wheelAxes.map((a) => axisName(a.name)).join(', ') || 'nothing for this layer')}">
         <span class="ident">Scroll wheel</span>${body}<span class="id">axis</span></button>`;
     }
     const unset = cell.mouse == null && cell.key == null;
-    return `<button class="card ${c.cls}${sel}${hl}" style="${pos}" data-dev="ms" data-key="${esc(cell.id)}" title="${esc(unset ? 'No input set: use Edit layout' : tip(c))}">
+    return `<button class="card ${c.cls}${sel}${hl}" style="${pos}" data-dev="ms" data-key="${esc(cell.id)}" title="${esc(unset ? 'No input set: choose what this button sends in Settings > Mouse layout' : tip(c))}">
       <span class="ident">${esc(cell.label)}</span>${unset ? '<div class="sub">input not set</div>' : cardBody(c)}<span class="id">${esc(c.k.ident)}</span></button>`;
   }).join('');
 }
@@ -390,12 +459,14 @@ function renderDetail(cards) {
   let title;
   if (selected.dev === 'az') {
     const k = c.k;
-    const how = k.kind === 'joy' ? `joystick button ${k.joyBtn}, game sees JOY${k.joyCode}` : k.kind === 'key' ? 'keyboard output' : k.kind === 'dir' ? 'thumbstick direction' : k.kind === 'analog' ? 'analog stick' : 'not assigned in Azeron software';
-    title = `Azeron #${k.id} &ndash; ${esc(k.ident || 'unassigned')} <span class="dim">${esc(how)}</span>`;
+    const how = k.kind === 'joy' ? `joystick button ${k.joyBtn}, game sees JOY${k.joyCode}` : k.kind === 'key' ? 'keyboard output' : k.kind === 'dir' ? 'thumbstick direction' : k.kind === 'analog' ? 'analog stick'
+      : k.kind === 'mouse' ? `mouse button, game sees Mouse${k.mouse + 1}` : k.kind === 'wheel' ? 'turns the mouse wheel one notch'
+        : k.kind === 'other' ? 'Azeron function: not something the game binds' : 'not assigned in Azeron software';
+    title = `Azeron #${esc(k.id)} &ndash; ${esc(k.ident || 'unassigned')} <span class="dim">${esc(how)}</span>`;
   } else if (selected.dev === 'kb') {
     title = `Keyboard &ndash; ${esc(c.cell.l)} <span class="dim">${c.cell.d != null ? 'DirectInput key ' + c.cell.d : esc(c.cell.tip ?? 'no fixed key code')}</span>`;
   } else {
-    title = `Mouse &ndash; ${esc(c.cell.label)} <span class="dim">${c.cell.mouse != null ? 'game sees Mouse' + (c.cell.mouse + 1) : c.cell.key != null ? 'sends keyboard key ' + esc(keyNameOf(c.cell.key)) : 'no game input set (edit layout)'}</span>`;
+    title = `Mouse &ndash; ${esc(c.cell.label)} <span class="dim">${c.cell.mouse != null ? 'game sees Mouse' + (c.cell.mouse + 1) : c.cell.key != null ? 'sends keyboard key ' + esc(keyNameOf(c.cell.key)) : 'no game input set (Settings > Mouse layout)'}</span>`;
   }
   const byTab = {};
   for (const e of c.entries) (byTab[e.item.tab] ??= []).push(e);
@@ -403,15 +474,23 @@ function renderDetail(cards) {
     title = `Mouse &ndash; Scroll wheel <span class="dim">used as an axis (scrolling), not as up/down buttons</span>`;
     for (const a of S.axes.filter((x) => x.mouseAxisId != null && x.mouseAxisId >= 2)) (byTab[a.tab] ??= []).push({ item: { name: axisName(a.name) }, bind: { inputs: [], text: '' } });
   }
-  let rows =Object.keys(TAB_NAME).filter((t) => byTab[t]).map((t) =>
+  // an Azeron key that turns the wheel also drives whatever uses the wheel as an axis (on any layer)
+  if (c.k?.kind === 'wheel') for (const a of S.axes.filter((x) => x.mouseAxisId != null && x.mouseAxisId >= 2)) (byTab[a.tab] ??= []).push({ item: { name: `${axisName(a.name)} (wheel axis)` }, bind: { inputs: [], text: '' } });
+  const bindLine = (e) => `<span class="sub">${esc(TAB_NAME[e.item.tab] ?? '')}:</span> ${esc(e.item.name)}${e.bind.inputs.length > 1 ? ` <span class="sub">(${esc(e.bind.text)})</span>` : ''}`;
+  let rows = Object.keys(TAB_NAME).filter((t) => byTab[t]).map((t) =>
     `<tr><td>${TAB_NAME[t]}</td><td>${uniq(byTab[t].map((e) => esc(e.item.name) + (e.bind.inputs.length > 1 ? ` <span class="sub">(${esc(e.bind.text)})</span>` : ''))).join('<br>')}</td></tr>`).join('');
-  if (c.modEntries.length) rows += `<tr><td>Modifier</td><td>${uniq(c.modEntries.map((e) => esc(e.item.name) + ` <span class="sub">(${esc(e.bind.text)})</span>`)).join('<br>')}</td></tr>`;
+  if (c.modEntries.length) rows += `<tr><td>Modifier</td><td>${uniq(c.modEntries.map((e) => `<span class="sub">${esc(TAB_NAME[e.item.tab] ?? '')}:</span> ` + esc(e.item.name) + ` <span class="sub">(${esc(e.bind.text)})</span>`)).join('<br>')}</td></tr>`;
+  // what the Azeron key does on a long press / double press, with whatever the game has bound to that
+  for (const a of c.alt ?? []) {
+    rows += `<tr><td>${altName(a)}</td><td><strong>${esc(a.ident)}</strong> <span class="sub">${a.kind === 'other' ? 'Azeron function' : a.entries.length ? '' : 'nothing bound in game'}</span>${a.entries.length ? '<br>' + uniq(a.entries.map(bindLine)).join('<br>') : ''}</td></tr>`;
+  }
   const mine = S.labels?.[selected.dev]?.[selected.key] ?? {};
-  const labelInputs = LAYERS.map(([id, name]) => `<label class="lbl${labelLayers().includes(id) ? ' live' : ''}"><span>${name}</span><input type="text" maxlength="60" data-layer="${id}" value="${esc(mine[id] ?? '')}" placeholder="&ndash;"></label>`).join('');
+  const active = labelLayers(c);
+  const labelInputs = LAYERS.map(([id, name]) => `<label class="lbl${active.includes(id) ? ' live' : ''}"><span>${name}</span><input type="text" maxlength="60" data-layer="${id}" value="${esc(mine[id] ?? '')}" placeholder="&ndash;"></label>`).join('');
   const stickTools = c.cell?.stick ? '<div class="dim" style="margin-top:6px;font-size:11px">Stick calibration is in Settings (the cog).</div>' : '';
   el.innerHTML = `<h3>${title}</h3>
-    <div class="detail-cols"><div>${rows ? `<table>${rows}</table>` : '<span class="dim">Nothing bound to this key in game.</span>'}${stickTools}</div>
-    <div class="labels"><div class="dim lbl-head">Custom label per layer (highlighted layers are active now)</div><div class="lbl-grid">${labelInputs}</div></div></div>`;
+    <div class="detail-cols"><div>${rows ? `<table>${rows}</table>` : `<span class="dim">${c.cls === 'special' ? 'This key runs an Azeron function; the game has nothing to bind to it.' : 'Nothing bound to this key in game.'}</span>`}${stickTools}</div>
+    <div class="labels"><div class="dim lbl-head">Custom label per layer (highlighted: the layers this key takes its label from right now, first match wins)</div><div class="lbl-grid">${labelInputs}</div></div></div>`;
 }
 
 async function saveLabel(dev, key, layer, text) {
@@ -422,16 +501,27 @@ async function saveLabel(dev, key, layer, text) {
   if (!Object.keys(all[k]).length) delete all[k];
   const cards = deviceCards();
   renderAzeron(cards.az); renderKeyboard(cards.kb); renderMouse(cards.ms); // not the detail panel: keep the input focused
-  await fetch('/api/labels', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dev, key: k, layer, text }) });
+  updateLive();
+  await post('/api/labels', { dev, key: k, layer, text }, 'save the label');
 }
 
 // ---------------------------------------------------------------- mouse layout editor
+// The editor lives in Settings > Mouse layout. `draft` is a working copy of the layout that exists while Settings is open;
+// nothing is stored until "Save layout" (closing Settings with unsaved changes asks first).
+const newDraft = () => S.g502.cells.map((c) => ({ ...c }));
+const cellNorm = (c) => ({ id: c.id, label: c.label, c: c.c, r: c.r, ...(c.mouse != null ? { mouse: c.mouse } : c.key != null ? { key: c.key } : {}) });
+const draftDirty = () => !!draft && !!S && JSON.stringify(draft.map(cellNorm)) !== JSON.stringify(S.g502.cells.map(cellNorm));
+/** Refresh the editor's status line and buttons after a change (`msg` = say this instead of the usual "Unsaved changes"). */
+function markDraft(msg) {
+  const dirty = draftDirty();
+  const state = $('mState');
+  if (state) state.textContent = msg ?? (dirty ? 'Unsaved changes' : '');
+  for (const id of ['mSave', 'mRevert']) { const b = $(id); if (b) b.disabled = !dirty; }
+}
+
 function renderMouseEditor() {
   const el = $('mouseEditor');
-  $('editMouse').textContent = draft ? 'Cancel' : 'Edit layout';
-  el.hidden = !draft;
-  if (!draft) return;
-  const profiles = S.g502.ghubProfiles ?? [];
+  if (!draft) { el.innerHTML = ''; return; }
   const keyOpts = S.keyTable.map(([c, n]) => `<option value="${c}">${esc(n)}</option>`).join('');
   const rows = draft.map((c, i) => {
     const isKey = c.key != null;
@@ -452,9 +542,10 @@ function renderMouseEditor() {
     <div class="mrow-actions">
       <button class="mini" id="mAdd">+ Add button</button>
       ${slots.length ? `<label class="pos">Add from G HUB <select id="ghubAdd"><option value="">choose...</option>${slots.map((s) => `<option value="${esc(s.slot)}">${esc(s.slot.toUpperCase())}: ${esc(s.label)}</option>`).join('')}</select></label>`
-        : `<span class="note">${S.g502.ghubProfile ? 'Every button of the chosen G HUB profile is already added.' : 'Choose a G HUB profile in Settings to add its buttons here.'}</span>`}
+        : `<span class="note">${S.g502.ghubProfile ? 'Every button of the chosen G HUB profile is already added.' : 'Choose a G HUB profile (under Controls and devices, above) to add its buttons here.'}</span>`}
     </div>
-    <div class="mrow-actions"><button id="mSave">Save layout</button><button class="mini" id="mCancel">Cancel</button></div>`;
+    <div class="mrow-actions"><button id="mSave">Save layout</button><button class="mini" id="mRevert">Revert</button><span class="note" id="mState" role="status"></span></div>`;
+  markDraft();
 }
 
 function nextFree() {
@@ -464,24 +555,34 @@ function nextFree() {
 const newId = () => { let n = 1; while (draft.some((c) => c.id === `btn${n}`)) n++; return `btn${n}`; };
 
 function editorEvent(e) {
+  if (!draft) return;
   const row = e.target.closest('.mrow');
   if (row) {
     const c = draft[Number(row.dataset.i)];
+    if (!c) return;
+    if (e.type === 'click') {
+      // a click only ever removes a row. Clicking a field or opening a dropdown must not touch the data
+      // (it used to reset the button's kind and code as soon as the "Kind" dropdown was clicked).
+      if (e.target.matches('.m-del')) { draft.splice(Number(row.dataset.i), 1); renderMouseEditor(); }
+      return;
+    }
     if (e.target.matches('.m-label')) c.label = e.target.value;
     else if (e.target.matches('.m-c')) c.c = Math.max(0, Math.min(7, Number(e.target.value) | 0));
     else if (e.target.matches('.m-r')) c.r = Math.max(0, Math.min(9, Number(e.target.value) | 0));
-    else if (e.target.matches('.m-kind')) {
+    else if (e.target.matches('.m-kind') && e.type === 'change') {
+      const kind = c.mouse != null ? 'mouse' : c.key != null ? 'key' : 'none';
+      if (e.target.value === kind) return;                       // nothing changed: keep the chosen button / key
       delete c.mouse; delete c.key;
       if (e.target.value === 'key') c.key = 23; else if (e.target.value === 'mouse') c.mouse = 0;
       renderMouseEditor();
     }
     else if (e.target.matches('.m-code')) { const v = Number(e.target.value); if (c.key != null) c.key = v; else c.mouse = v; }
-    else if (e.target.matches('.m-del') && e.type === 'click') { draft.splice(Number(row.dataset.i), 1); renderMouseEditor(); }
+    markDraft();
     return;
   }
   if (e.type !== 'change' && e.type !== 'click') return;
   if (e.target.id === 'mAdd') { draft.push({ id: newId(), label: 'Button', mouse: 3, ...nextFree() }); renderMouseEditor(); }
-  else if (e.target.id === 'mCancel') { draft = null; render(); }
+  else if (e.target.id === 'mRevert') { draft = newDraft(); renderMouseEditor(); }
   else if (e.target.id === 'mSave') saveMouse();
   else if (e.target.id === 'ghubAdd' && e.target.value) {
     const s = S.g502.ghubSlots.find((x) => x.slot === e.target.value);
@@ -491,28 +592,32 @@ function editorEvent(e) {
   }
 }
 
+/** Store the edited layout. Returns whether it was saved; if not, the editor keeps your changes and says why. */
 async function saveMouse() {
-  const r = await fetch('/api/mouse-layout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cells: draft }) });
-  const j = await r.json();
-  if (!r.ok) { alert(`Could not save: ${j.error}`); return; }
+  if (!(await post('/api/mouse-layout', { cells: draft }, 'save the mouse layout'))) { markDraft(clientWarn); return false; }
   draft = null;
-  await load();
+  await load();          // (while Settings is open, load() starts a fresh working copy from what was just saved)
+  markDraft('Saved.');
+  return true;
 }
 
 // ---------------------------------------------------------------- sidebars
 function inputChip(inp) {
   if (inp.kind === 'joy' && S.azeron) {
     const k = Object.values(S.azeron.keys).find((x) => x.joyCode === inp.code);
-    if (k) return `<span class="chip az" title="Azeron key #${k.id}">AZ #${k.id}</span>`;
-    return `<span class="chip warn" title="No Azeron key sends this button">JOY${inp.code}</span>`;
+    if (k) return `<span class="chip az" title="Azeron key #${esc(k.id)}">AZ #${esc(k.id)}</span>`;
+    return `<span class="chip warn" title="No Azeron key sends this button">JOY${esc(inp.code)}</span>`;
   }
   if (inp.kind === 'mouse') {
     const g = S.g502.cells.find((c) => c.mouse === inp.code);
+    // no such button on the mouse panel, but an Azeron key is set to send it
+    const az = !g && S.azeron && Object.values(S.azeron.keys).find((k) => (k.kind === 'mouse' && k.mouse === inp.code) || (k.kind === 'wheel' && inp.code === (k.wheel === 'up' ? 5 : 6)));
+    if (az) return `<span class="chip az" title="Azeron key #${esc(az.id)} sends ${esc(inp.text)}">AZ #${esc(az.id)}</span>`;
     return `<span class="chip ms" title="${g ? 'Mouse: ' + esc(g.label) : 'mouse button'}">${esc(inp.text)}</span>`;
   }
   if (inp.kind === 'key') {
     const az = S.azeron && Object.values(S.azeron.keys).find((k) => k.kind === 'key' && k.key.code === inp.code && !k.key.mods.length);
-    if (az) return `<span class="chip az" title="Azeron key #${az.id} sends ${esc(inp.text)}">AZ #${az.id}</span>`;
+    if (az) return `<span class="chip az" title="Azeron key #${esc(az.id)} sends ${esc(inp.text)}">AZ #${esc(az.id)}</span>`;
     const g = S.g502.cells.find((c) => c.key === inp.code);
     if (g) return `<span class="chip ms" title="Mouse ${esc(g.label)} sends this key">${esc(inp.text)}</span>`;
   }
@@ -533,6 +638,13 @@ function groupBySection(items) {
   return groups;
 }
 
+// Sidebar sections the user opened or closed by hand ("bound|Ground – Movement" -> true/false). Every render rebuilds the
+// lists, so without this a click on a key would put each section back to its default.
+const sectionOpen = new Map();
+/** One collapsible sidebar section. `forceOpen` (a filter is typed) wins; then the user's own choice; then the default. */
+const det = (key, dfltOpen, summary, body, { cls = '', forceOpen = false } = {}) =>
+  `<details${cls ? ` class="${cls}"` : ''} data-k="${esc(key)}"${forceOpen || (sectionOpen.get(key) ?? dfltOpen) ? ' open' : ''}><summary>${summary}</summary>${body}</details>`;
+
 function renderSides() {
   const q = $('filter').value.trim().toLowerCase();
   const set = S.items.filter(inSet);
@@ -545,22 +657,23 @@ function renderSides() {
   $('missCount').textContent = `(${essential.length} essential, ${optional.length} optional)`;
 
   const rowHtml = (it, dim) => `<div class="row${hlItem === it.id ? ' hl' : ''}" data-item="${esc(it.id)}"><span class="nm">${esc(it.name)}</span><span class="keys">${dim ? (it.explicitUnbind ? '<span class="chip warn">unbound</span>' : '') : bindChips(it)}</span></div>`;
-  const list = (items, dim) => !items.length ? '<div class="note">Nothing here.</div>'
-    : [...groupBySection(items)].map(([k, v]) => `<details ${q || v.length < 12 ? 'open' : ''}><summary>${esc(k)} <span class="count">(${v.length})</span></summary>${v.map((it) => rowHtml(it, dim)).join('')}</details>`).join('');
-  $('boundList').innerHTML = list(bound, false);
+  const list = (items, dim, scope) => !items.length ? '<div class="note">Nothing here.</div>'
+    : [...groupBySection(items)].map(([k, v]) => det(`${scope}|${k}`, v.length < 12, `${esc(k)} <span class="count">(${v.length})</span>`, v.map((it) => rowHtml(it, dim)).join(''), { forceOpen: !!q })).join('');
+  $('boundList').innerHTML = list(bound, false, 'bound');
   const optBlock = optional.length && !ui.hideOptional
-    ? `<details class="opt"${q ? ' open' : ''}><summary>Optional &ndash; the game doesn't warn if these are unbound (${optional.length})</summary>${list(optional, true)}</details>` : '';
-  $('missList').innerHTML = (essential.length ? list(essential, true) : '<div class="note">Every essential action is bound.</div>') + optBlock;
+    ? det('miss|optional', false, `Optional &ndash; the game doesn't warn if these are unbound (${optional.length})`, list(optional, true, 'opt'), { cls: 'opt', forceOpen: !!q }) : '';
+  $('missList').innerHTML = (essential.length ? list(essential, true, 'miss') : '<div class="note">Every essential action is bound.</div>') + optBlock;
 }
 
 function renderAttention(cards) {
   const out = [];
   const idle = (c) => !c.entries.length && !c.modEntries.length;
-  const deadAz = cards.az.filter((c) => (c.k.kind === 'joy' || c.k.kind === 'dir' || (c.k.kind === 'key' && c.k.key.code != null)) && idle(c));
-  if (deadAz.length) out.push(`<details open><summary>Azeron keys with nothing bound in game (${deadAz.length})</summary>${deadAz.map((c) => `<div class="row focus" data-focus="az:${c.key}" title="Click to highlight this key"><span class="nm">#${c.k.id} ${esc(labelFor('az', c.key)?.text ?? '')}</span><span class="keys"><span class="chip warn">${esc(c.k.ident)}</span></span></div>`).join('')}</details>`);
+  // (a key that turns the wheel is never "dead": like the mouse's own wheel, it may be in use as an axis)
+  const deadAz = cards.az.filter((c) => (c.k.kind === 'joy' || c.k.kind === 'dir' || c.k.kind === 'mouse' || (c.k.kind === 'key' && c.k.key.code != null)) && idle(c));
+  if (deadAz.length) out.push(det('attn|az', true, `Azeron keys with nothing bound in game (${deadAz.length})`, deadAz.map((c) => `<div class="row focus" data-focus="az:${esc(c.key)}" title="Click to highlight this key"><span class="nm">#${esc(c.k.id)} ${esc(labelFor('az', c.key, c)?.text ?? '')}</span><span class="keys"><span class="chip warn">${esc(c.k.ident)}</span></span></div>`).join('')));
   // wheel up/down (WT mouse 5/6) aren't real buttons: a wheel used as an axis (or merged card) is never "unbound"
   const deadMs = cards.ms.filter((c) => !c.merged && c.cell.mouse !== 5 && c.cell.mouse !== 6 && (c.cell.mouse != null || c.cell.key != null) && idle(c));
-  if (deadMs.length) out.push(`<details open><summary>Mouse buttons with nothing bound (${deadMs.length})</summary>${deadMs.map((c) => `<div class="row focus" data-focus="ms:${esc(c.key)}" title="Click to highlight this button"><span class="nm">${esc(c.cell.label)}</span><span class="keys"><span class="chip warn">${esc(c.k.ident)}</span></span></div>`).join('')}</details>`);
+  if (deadMs.length) out.push(det('attn|ms', true, `Mouse buttons with nothing bound (${deadMs.length})`, deadMs.map((c) => `<div class="row focus" data-focus="ms:${esc(c.key)}" title="Click to highlight this button"><span class="nm">${esc(c.cell.label)}</span><span class="keys"><span class="chip warn">${esc(c.k.ident)}</span></span></div>`).join('')));
 
   if (S.azeron) {
     const sent = new Set(Object.values(S.azeron.keys).map((k) => k.joyCode).filter((c) => c != null));
@@ -569,7 +682,7 @@ function renderAttention(cards) {
     for (const it of S.items) if (inSet(it)) for (const b of it.binds) for (const i of b.inputs) {
       if (i.kind === 'joy' && !sent.has(i.code) && dev && i.code >= dev.buttonsOffset && i.code < dev.buttonsOffset + dev.buttonsCount) (orphans.get(i.code) ?? orphans.set(i.code, []).get(i.code)).push(it.name);
     }
-    if (orphans.size) out.push(`<details open><summary>Bound to an Azeron button no key sends (${orphans.size})</summary>${[...orphans].map(([c, n]) => `<div class="row"><span class="nm">${esc(uniq(n).join(', '))}</span><span class="keys"><span class="chip warn">JOY${c - dev.buttonsOffset + 1}</span></span></div>`).join('')}</details>`);
+    if (orphans.size) out.push(det('attn|orphans', true, `Bound to an Azeron button no key sends (${orphans.size})`, [...orphans].map(([c, n]) => `<div class="row"><span class="nm">${esc(uniq(n).join(', '))}</span><span class="keys"><span class="chip warn">JOY${esc(c - dev.buttonsOffset + 1)}</span></span></div>`).join('')));
   }
 
   const seen = new Map();
@@ -587,7 +700,7 @@ function renderAttention(cards) {
       if (names.length > 1) conflicts.set(list[0].b.text + '|' + names.slice().sort().join(), { text: list[0].b.text, names, sigs: list[0].b.inputs.map((i) => `${i.kind}:${i.code}`) });
     }
   }
-  if (conflicts.size) out.push(`<details><summary>Same input, several actions (${conflicts.size})</summary><div class="note">Often intentional (different weapons/modes). Shown so you can spot accidents.</div>${[...conflicts.values()].map((c) => `<div class="row focus" data-sigs="${c.sigs.join(',')}" title="Click to highlight the key(s) on your devices"><span class="nm">${c.names.map(esc).join(' / ')}</span><span class="keys"><span class="chip">${esc(c.text)}</span></span></div>`).join('')}</details>`);
+  if (conflicts.size) out.push(det('attn|conflicts', false, `Same input, several actions (${conflicts.size})`, `<div class="note">Often intentional (different weapons/modes). Shown so you can spot accidents.</div>${[...conflicts.values()].map((c) => `<div class="row focus" data-sigs="${esc(c.sigs.join(','))}" title="Click to highlight the key(s) on your devices"><span class="nm">${c.names.map(esc).join(' / ')}</span><span class="keys"><span class="chip">${esc(c.text)}</span></span></div>`).join('')}`));
   $('attnCount').textContent = out.length ? '' : '(none)';
   $('attn').innerHTML = out.join('') || '<div class="note">Everything set up on your devices is bound in game.</div>';
 }
@@ -630,6 +743,21 @@ function render() {
     document.body.classList.toggle(`no-${d.toLowerCase()}`, !ui[`show${d}`]);
   }
   $('optional').checked = ui.hideOptional;
+  document.body.classList.toggle('kb-big', kbBig());
+  for (const d of DEVS) {
+    // the overlay fits everything to its small window, and a keyboard set to "fit the window" sizes itself
+    const fit = d === 'Keyboard' && ui.kbSize === 'fit';
+    const scale = ui.overlayMode || fit ? 1 : ui[`size${d}`] / 100;
+    const panel = document.querySelector(`.device.${d.toLowerCase()}`);
+    panel.style.setProperty('--dscale', scale);
+    panel.classList.toggle('scaled-up', scale > 1 && d !== 'Keyboard');   // (the keyboard panel always scrolls sideways when it has to)
+    const sel = $(`size${d}`);
+    const want = fit ? 'fit' : String(ui[`size${d}`]);
+    if (![...sel.options].some((o) => o.value === want)) sel.add(new Option(`${want}%`, want));   // a size typed into ui.json by hand
+    sel.value = want;
+  }
+  $('deviceFlow').value = ui.deviceFlow;
+  document.body.classList.toggle('side-scroll', ui.deviceFlow === 'row' && !ui.overlayMode);   // (the overlay is a small fixed window: it always stacks)
   $('compact').setAttribute('aria-pressed', String(ui.compact));
   document.body.classList.toggle('compact', ui.compact);
   document.body.classList.toggle('overlay', !!ui.overlayMode);
@@ -655,9 +783,8 @@ function render() {
   renderMouseEditor();
   renderSides();
   renderAttention(cards);
-  const w = $('warn');
-  w.hidden = !S.warnings.length;
-  w.textContent = S.warnings.join('  |  ');
+  showWarn();
+  updateLive();   // the cards and the live indicator were just rebuilt: put the current input state back on them
 }
 
 function fillSelectors() {
@@ -681,6 +808,7 @@ function fillSelectors() {
     `Controls: ${esc(S.machine)}`,
     S.azeron ? `Azeron: ${esc(S.azeron.name)} (joystick buttons start at ${S.azeron.offset})` : 'Azeron: not found',
     `Mouse layout: ${S.g502.isDefault ? 'default (not edited yet)' : 'your saved layout'}`,
+    `Settings folder: ${esc(S.dataDir ?? '')}`,
   ].join('<br>');
   if (!cal) $('calMsg').textContent = calText || (S.config.stickCal ? 'Calibrated.' : 'Using the stick’s X/Y axes.');
 }
@@ -695,20 +823,20 @@ async function load() {
       uiFromServer = true;                     // (a stale local copy must never override them, e.g. a leftover overlay flag)
       if (j.ui && Object.keys(j.ui).length) { for (const k of Object.keys(ui)) delete ui[k]; Object.assign(ui, j.ui); uiDefaults(); }
     }
+    if (clientWarn.startsWith('Could not load')) clientWarn = '';
+    if (!$('settings').hidden && !draft) draft = newDraft();   // Settings is open: its mouse-layout editor needs a working copy
     fillSelectors();
     render();
     startLive();
-    updateLive();
   } catch (e) {
-    const w = $('warn'); w.hidden = false; w.textContent = `Could not load: ${e.message}`;
+    clientWarn = `Could not load: ${e.message}`;
+    showWarn();
   }
 }
 
 async function setConfig(patch) {
-  await fetch('/api/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) });
-  const keepDraft = draft;
-  await load();
-  if (keepDraft) { draft = keepDraft; renderMouseEditor(); }
+  await post('/api/config', patch, 'save the setting');
+  await load();   // (an open mouse-layout draft is kept as it is: load() only starts one when there is none)
 }
 
 /** Clicking a notification highlights the device key(s) it is about and opens that key's details. */
@@ -734,12 +862,14 @@ function focusFromRow(row) {
   }
   const next = deviceCards(); // lighter than render(): keeps the sidebar sections as the user left them
   renderAzeron(next.az); renderKeyboard(next.kb); renderMouse(next.ms); renderDetail(next);
+  updateLive();
   // the highlight is temporary: it fades after a few seconds
   clearTimeout(flashTimer);
   if (flash.size) flashTimer = setTimeout(() => {
     flash = new Set();
     const again = deviceCards();
     renderAzeron(again.az); renderKeyboard(again.kb); renderMouse(again.ms);
+    updateLive();
   }, 3500);
   document.querySelector('.card.flash')?.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
 }
@@ -747,8 +877,14 @@ function focusFromRow(row) {
 // ---------------------------------------------------------------- events
 document.addEventListener('click', (e) => {
   if (e.target.closest('#mouseEditor')) return editorEvent(e);
+  const sum = e.target.closest('.side summary');
+  if (sum?.parentElement.dataset.k) { const d = sum.parentElement; setTimeout(() => sectionOpen.set(d.dataset.k, d.open)); return; }   // remember it (see sectionOpen)
   const tab = e.target.closest('[data-tab]');
-  if (tab) { ui.tab = tab.dataset.tab; flash.clear(); saveUi(); render(); return; }
+  if (tab) {
+    ui.tab = tab.dataset.tab; flash.clear(); saveUi(); render();
+    $('tabs').querySelector('[aria-selected="true"]')?.focus();   // render rebuilt the tab row: keep the keyboard position
+    return;
+  }
   const f = e.target.closest('.row[data-focus], .row[data-sigs]');
   if (f) { focusFromRow(f); return; }
   const card = e.target.closest('.card');
@@ -782,24 +918,71 @@ $('calStick').addEventListener('click', startCalibration);
 $('calReset').addEventListener('click', () => {
   cal = null; calText = 'Reset to the default X/Y axes.'; showCalText();
   S.config.stickCal = '';
-  fetch('/api/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stickCal: '' }) });
+  post('/api/config', { stickCal: '' }, 'save the calibration');
 });
 $('ghubProfile').addEventListener('change', (e) => setConfig({ ghubProfile: e.target.value }));
 $('kbLayout').addEventListener('change', (e) => setConfig({ keyboardLayout: e.target.value }));
+$('deviceFlow').addEventListener('change', (e) => { ui.deviceFlow = e.target.value === 'row' ? 'row' : 'wrap'; saveUi(); render(); });
+// Panel sizes (Settings > View): one list per device. The keyboard's list also offers "fit the window" (small square keys).
+for (const d of DEVS) {
+  const sel = $(`size${d}`);
+  if (d === 'Keyboard') sel.add(new Option('Fit the window (small keys)', 'fit'));
+  for (const n of SIZES) sel.add(new Option(n === 100 ? '100% (default)' : `${n}%`, String(n)));
+  sel.addEventListener('change', (e) => {
+    if (e.target.value === 'fit') ui.kbSize = 'fit';
+    else {
+      if (d === 'Keyboard') ui.kbSize = 'azeron';
+      ui[`size${d}`] = Math.max(SIZE_MIN, Math.min(SIZE_MAX, Number(e.target.value) || 100));
+    }
+    saveUi(); render();
+  });
+}
+// Side-by-side view: the mouse wheel over the panels scrolls the row sideways, unless the page itself still has somewhere to
+// scroll up or down in that direction (then the wheel does that, as usual). Shift+wheel and touchpads work as they always do.
+document.querySelector('.devices').addEventListener('wheel', (e) => {
+  if (e.ctrlKey || e.shiftKey || e.deltaX || !e.deltaY) return;
+  // what scrolls sideways here: the whole row of panels (side by side), or the keyboard panel under the pointer when its
+  // Azeron-sized keys make it wider than the window (stacked)
+  const row = document.body.classList.contains('side-scroll') ? e.currentTarget
+    : e.target.closest(document.body.classList.contains('kb-big') ? '.device.keyboard, .device.scaled-up' : '.device.scaled-up');
+  if (!row) return;
+  const max = row.scrollWidth - row.clientWidth;
+  if (max <= 0 || (e.deltaY < 0 ? row.scrollLeft <= 0 : row.scrollLeft >= max - 1)) return;      // nothing (more) to scroll sideways
+  const centre = document.querySelector('.center');
+  const page = getComputedStyle(centre).overflowY === 'visible' ? document.querySelector('.layout') : centre;   // (narrow windows scroll as a whole)
+  const pageCanScroll = e.deltaY < 0 ? page.scrollTop > 0 : page.scrollTop < page.scrollHeight - page.clientHeight - 1;
+  if (pageCanScroll) return;
+  row.scrollLeft += e.deltaY * (e.deltaMode === 1 ? 40 : 1);
+  e.preventDefault();
+}, { passive: false });
 $('reloadData').addEventListener('click', load);
 
 // ---- settings page (opened with the cog) ----
 let settingsReturnFocus = null;
 function openSettings() {
+  if (!S) return;                                   // nothing loaded yet: there is nothing to set up
   settingsReturnFocus = document.activeElement;
   fillSelectors();
+  draft = newDraft();                               // working copy for the mouse-layout editor
+  renderMouseEditor();
   $('settings').hidden = false;
   $('settingsClose').focus();
 }
-function closeSettings() {
-  if ($('settings').hidden) return;
-  $('settings').hidden = true;
-  settingsReturnFocus?.focus?.();
+/** Close Settings. With unsaved mouse-layout changes it asks whether to save them first. Returns false if it stayed open
+ *  (the changes could not be saved: the editor says why). */
+let closingSettings = false;
+async function closeSettings() {
+  if ($('settings').hidden) return true;
+  if (closingSettings) return false;
+  closingSettings = true;
+  try {
+    if (draftDirty() && confirm('Save your changes to the mouse layout?\n\nOK saves them. Cancel throws them away.') && !(await saveMouse())) return false;
+    draft = null;
+    $('settings').hidden = true;
+    renderMouseEditor();
+    settingsReturnFocus?.focus?.();
+    return true;
+  } finally { closingSettings = false; }
 }
 $('settingsBtn').addEventListener('click', openSettings);
 $('settingsClose').addEventListener('click', closeSettings);
@@ -811,10 +994,9 @@ $('detail').addEventListener('change', (e) => {
   const input = e.target.closest('input[data-layer]');
   if (input && selected) saveLabel(selected.dev, selected.key, input.dataset.layer, input.value);
 });
-$('editMouse').addEventListener('click', () => { draft = draft ? null : S.g502.cells.map((c) => ({ ...c })); render(); });
 $('overlay').addEventListener('change', (e) => { ui.common = e.target.checked; saveUi(); render(); });
 for (const d of DEVS) {
-  $(`show${d}`).addEventListener('click', () => { ui[`show${d}`] = !ui[`show${d}`]; if (d === 'Mouse' && !ui.showMouse) draft = null; saveUi(); render(); });
+  $(`show${d}`).addEventListener('click', () => { ui[`show${d}`] = !ui[`show${d}`]; saveUi(); render(); });
 }
 $('drone').addEventListener('change', (e) => { ui.drone = e.target.checked; saveUi(); render(); });
 $('optional').addEventListener('change', (e) => { ui.hideOptional = e.target.checked; saveUi(); render(); });
@@ -850,9 +1032,11 @@ if (window.kbHost) {
   async function setOverlay(on, { setup = false } = {}) {
     const kb = window.kbHost;
     if (on) {
-      ui.overlayPrev = { compact: ui.compact, showLeft: ui.showLeft, showRight: ui.showRight, showAzeron: ui.showAzeron, showKeyboard: ui.showKeyboard, showMouse: ui.showMouse, transparent: host.transparent, onTop: host.onTop, opacity: host.opacity };
+      // what to put back afterwards. Already in overlay mode (e.g. "Set up..." opened from it): keep the first snapshot,
+      // otherwise the overlay's own look would be remembered as "your previous setup".
+      if (!ui.overlayMode || !ui.overlayPrev) ui.overlayPrev = { compact: ui.compact, showLeft: ui.showLeft, showRight: ui.showRight, showAzeron: ui.showAzeron, showKeyboard: ui.showKeyboard, showMouse: ui.showMouse, transparent: host.transparent, onTop: host.onTop, opacity: host.opacity };
       ui.overlayMode = true; ui.overlaySetup = setup; ui.compact = true; ui.showLeft = false; ui.showRight = false;
-      for (const d of DEVS) if (ui[`overlay${d}`] !== undefined) ui[`show${d}`] = ui[`overlay${d}`];   // which device panels the overlay shows
+      for (const d of DEVS) ui[`show${d}`] = ui[`overlay${d}`] ?? (d !== 'Keyboard');   // which device panels the overlay shows (same defaults as the Settings checkboxes)
     } else {
       const p = ui.overlayPrev ?? {};
       ui.overlayMode = false; ui.overlaySetup = false;
@@ -871,7 +1055,7 @@ if (window.kbHost) {
   $('overlayChk').addEventListener('change', (e) => setOverlay(e.target.checked));
 
   // ---- overlay position / size / mouse: set up from Settings ----
-  $('overlaySetup').addEventListener('click', () => { closeSettings(); setOverlay(true, { setup: true }); });
+  $('overlaySetup').addEventListener('click', async () => { if (await closeSettings()) setOverlay(true, { setup: true }); });
   for (const d of DEVS) $(`setup${d}`).addEventListener('change', (e) => { ui[`show${d}`] = e.target.checked; saveUi(); render(); });
   $('setupSave').addEventListener('click', async () => {
     for (const d of DEVS) ui[`overlay${d}`] = ui[`show${d}`];   // remember which panels you chose in the setup bar
@@ -897,32 +1081,48 @@ if (window.kbHost) {
     else if (c === 'overlay') $('overlayChk').click();     // tray icon click / overlay hotkey
   });
 
-  // Overlay hotkey: click the button, then press the combination (needs Ctrl, Alt or Shift). Esc cancels.
+  // Global hotkeys (Settings > Hotkeys): click a button, then press the combination. It needs Ctrl, Alt or Win, because the
+  // shortcut is taken away from every other program (the game included) while this app runs. Esc cancels, Backspace turns it off.
   const accelKey = (e) => /^Key[A-Z]$/.test(e.code) ? e.code.slice(3) : /^Digit\d$/.test(e.code) ? e.code.slice(5) : /^F\d+$/.test(e.code) ? e.code
     : ({ Space: 'Space', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown', Insert: 'Insert', Delete: 'Delete', Tab: 'Tab', Enter: 'Enter' })[e.code] ?? null;
   const niceAccel = (a) => String(a).replace('Control', 'Ctrl').replace('Super', 'Win');
-  let hotkeyLabel = 'Ctrl+Alt+O';
-  $('hotkeyBtn').addEventListener('click', () => {
-    const btn = $('hotkeyBtn');
-    btn.textContent = 'Press the keys...  (Esc cancels)';
-    const finish = () => { window.removeEventListener('keydown', onKey, true); btn.textContent = hotkeyLabel; };
-    const onKey = (e) => {
-      e.preventDefault(); e.stopPropagation();
-      if (e.key === 'Escape') return finish();
-      if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
-      const key = accelKey(e);
-      const mods = [e.ctrlKey && 'Control', e.altKey && 'Alt', e.shiftKey && 'Shift', e.metaKey && 'Super'].filter(Boolean);
-      if (!key || !mods.length) { btn.textContent = 'Use Ctrl / Alt / Shift + a key'; return; }
-      window.kbHost.setOverlayHotkey([...mods, key].join('+'));
+  let hotkeys = {};        // name -> { accel, ok }, as reported by the desktop shell
+  let hotkeyFailed = null; // { name, accel, why } for the last change that could not be applied
+  let capturing = null;    // the button that is waiting for a key press
+  const hotkeyText = (name) => {
+    const k = hotkeys[name];
+    return !k ? '...' : !k.accel ? 'Off' : `${niceAccel(k.accel)}${k.ok ? '' : ' (taken by another app)'}`;
+  };
+  const paintHotkeys = () => {
+    for (const b of document.querySelectorAll('[data-hotkey]')) if (b !== capturing) b.textContent = hotkeyText(b.dataset.hotkey);
+    $('hotkeyMsg').textContent = hotkeyFailed
+      ? `${niceAccel(hotkeyFailed.accel)} ${hotkeyFailed.why === 'duplicate' ? 'is already used by another shortcut of this app' : 'is taken by another app'}: the previous shortcut was kept.` : '';
+    const ct = hotkeys.clickThrough?.accel, sh = hotkeys.window?.accel;
+    $('ghost').title = `Click-through: mouse clicks pass to the game.${ct ? ` ${niceAccel(ct)} toggles it.` : ''}${sh ? ` ${niceAccel(sh)} shows/hides the window.` : ''}`;
+  };
+  $('settings').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-hotkey]');
+    if (!btn || capturing) return;
+    capturing = btn;
+    btn.textContent = 'Press the keys...  (Esc cancels, Backspace = off)';
+    const finish = () => { window.removeEventListener('keydown', onKey, true); capturing = null; paintHotkeys(); };
+    const onKey = (ev) => {
+      ev.preventDefault(); ev.stopPropagation();
+      if (ev.key === 'Escape') return finish();
+      if (['Control', 'Alt', 'Shift', 'Meta'].includes(ev.key)) return;
+      const mods = [ev.ctrlKey && 'Control', ev.altKey && 'Alt', ev.shiftKey && 'Shift', ev.metaKey && 'Super'].filter(Boolean);
+      if (ev.key === 'Backspace' && !mods.length) { window.kbHost.setHotkey(btn.dataset.hotkey, ''); return finish(); }
+      const key = accelKey(ev);
+      if (!key || !mods.some((m) => m !== 'Shift')) { btn.textContent = 'Use Ctrl / Alt / Win + a key'; return; }
+      window.kbHost.setHotkey(btn.dataset.hotkey, [...mods, key].join('+'));
       finish();
     };
     window.addEventListener('keydown', onKey, true);
   });
   window.kbHost.onState?.((s) => {
-    if (s.overlayKey) {
-      hotkeyLabel = `${niceAccel(s.overlayKey)}${s.overlayKeyOk === false ? ' (taken by another app)' : ''}`;
-      if (!$('hotkeyBtn').textContent.startsWith('Press')) $('hotkeyBtn').textContent = hotkeyLabel;
-    }
+    hotkeys = s.keys ?? {};
+    hotkeyFailed = s.keyFailed ?? null;
+    paintHotkeys();
   });
   window.kbHost.onState?.((s) => {
     const b = s.overlayBounds;

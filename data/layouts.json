@@ -1,5 +1,5 @@
 {
-  "_note": "Azeron Cyborg 2 key positions (grid col,row) transcribed from the Azeron software view. id = Azeron key id. Edit freely.",
+  "_note": "Azeron Cyborg 2 key positions (grid col,row) transcribed from the Azeron software view. id = Azeron key id. Edit freely. (The mouse layout is not here: it is edited in the app and saved as mouse-layout.json.)",
   "azeron": {
     "cols": 9,
     "rows": 6,
@@ -16,26 +16,6 @@
       { "id": 20, "c": 8, "r": 4 },
       { "id": 37, "c": 1, "r": 5 }, { "id": 38, "c": 2, "r": 5 }, { "id": 13, "c": 3, "r": 5 }, { "id": 18, "c": 4, "r": 5 },
       { "id": 23, "c": 6, "r": 5 }
-    ]
-  },
-  "g502": {
-    "_note": "slot = G HUB slot name. mouse = WT mouseButton code (0 LMB,1 RMB,2 MMB,3 Mouse4,4 Mouse5). Unknown G HUB functions have no WT code until you set one in data/g502-overrides.json.",
-    "cells": [
-      { "slot": "g1",  "label": "Left",        "c": 0, "r": 0, "mouse": 0 },
-      { "slot": "g3",  "label": "Wheel click", "c": 1, "r": 0, "mouse": 2 },
-      { "slot": "g2",  "label": "Right",       "c": 2, "r": 0, "mouse": 1 },
-      { "slot": "scroll1", "label": "Tilt L",  "c": 0, "r": 1 },
-      { "slot": "wheelup", "label": "Wheel up", "c": 1, "r": 1, "mouse": 5, "fixed": true },
-      { "slot": "scroll2", "label": "Tilt R",  "c": 2, "r": 1 },
-      { "slot": "g11", "label": "G11",         "c": 0, "r": 2 },
-      { "slot": "wheeldown", "label": "Wheel down", "c": 1, "r": 2, "mouse": 6, "fixed": true },
-      { "slot": "g10", "label": "G10",         "c": 2, "r": 2 },
-      { "slot": "g4",  "label": "G4",          "c": 0, "r": 3 },
-      { "slot": "g9",  "label": "G9",          "c": 1, "r": 3 },
-      { "slot": "g6",  "label": "G6",          "c": 2, "r": 3 },
-      { "slot": "g5",  "label": "G5",          "c": 0, "r": 4 },
-      { "slot": "g7",  "label": "G7",          "c": 1, "r": 4 },
-      { "slot": "g8",  "label": "G8",          "c": 2, "r": 4 }
     ]
   }
 }

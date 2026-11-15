@@ -1,29 +1,42 @@
-// War Thunder keybind viewer. Zero dependencies (Node >= 22.5). Read-only on game/device files:
-// the only files this app writes are config.json, labels.json and mouse-layout.json in its own folder.
+// War Thunder keybind viewer. Zero dependencies (Node >= 22.13). Read-only on game/device files:
+// the only files this app writes are its four settings files (config.json, ui.json, labels.json, mouse-layout.json).
+// They live in this folder, or in the folder named by WTKB_DATA_DIR (the packaged desktop app points that at its user-data folder).
 import http from 'node:http';
-import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, copyFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { readControls, resolveBinds, readDeviceMapping, describeInput, describeBinding } from './lib/wtconfig.mjs';
 import { readStore, listProfiles, readProfile, defaultStorePath } from './lib/azeron.mjs';
-import { listGHubProfiles, readGHubProfile, defaultDbPath } from './lib/ghub.mjs';
+import { loadGHub, listGHubProfiles, readGHubProfile, cleanStaleCopies, defaultDbPath } from './lib/ghub.mjs';
 import { keyName, keyTable, mouseName, dikToVk, MOUSE_VK } from './lib/dik.mjs';
 import { createLive } from './lib/live.mjs';
 import { keyboardLayout, keyboardChoices } from './lib/kblayout.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(ROOT, 'public');
-const CONFIG_PATH = join(ROOT, 'config.json');
-const LABELS_PATH = join(ROOT, 'labels.json');
-const MOUSE_PATH = join(ROOT, 'mouse-layout.json');
-const UI_PATH = join(ROOT, 'ui.json');
+const SETTINGS_FILES = ['config.json', 'ui.json', 'labels.json', 'mouse-layout.json'];
+const DATA_DIR = process.env.WTKB_DATA_DIR ? resolve(process.env.WTKB_DATA_DIR) : ROOT;
+if (DATA_DIR !== ROOT) {
+  // first run with a separate settings folder: start from the settings that shipped in the app folder, if any
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    for (const f of SETTINGS_FILES) if (!existsSync(join(DATA_DIR, f)) && existsSync(join(ROOT, f))) copyFileSync(join(ROOT, f), join(DATA_DIR, f));
+  } catch (e) { console.error(`settings folder ${DATA_DIR}: ${e.message}`); }
+}
+const CONFIG_PATH = join(DATA_DIR, 'config.json');
+const LABELS_PATH = join(DATA_DIR, 'labels.json');
+const MOUSE_PATH = join(DATA_DIR, 'mouse-layout.json');
+const UI_PATH = join(DATA_DIR, 'ui.json');
 // view settings the page may save (whitelist + types; nothing else is written)
-const UI_KEYS = { tab: 'string', common: 'boolean', drone: 'boolean', hideOptional: 'boolean', compact: 'boolean', showMouse: 'boolean', showLeft: 'boolean', showRight: 'boolean', overlayMode: 'boolean', overlaySetup: 'boolean', overlayMouse: 'boolean',
+const UI_KEYS = { tab: 'string', deviceFlow: 'string', kbSize: 'string', common: 'boolean', drone: 'boolean', hideOptional: 'boolean', compact: 'boolean', showMouse: 'boolean', showLeft: 'boolean', showRight: 'boolean', overlayMode: 'boolean', overlaySetup: 'boolean', overlayMouse: 'boolean',
   showAzeron: 'boolean', showKeyboard: 'boolean', overlayAzeron: 'boolean', overlayKeyboard: 'boolean' };
 const cleanUi = (p) => {
   const out = {};
   for (const [k, t] of Object.entries(UI_KEYS)) if (typeof p?.[k] === t) out[k] = t === 'string' ? String(p[k]).slice(0, 20) : p[k];
+  if (!['wrap', 'row'].includes(out.deviceFlow)) delete out.deviceFlow;   // device panels: stacked (wrap) or side by side with a sideways scroll bar (row)
+  if (!['azeron', 'fit'].includes(out.kbSize)) delete out.kbSize;         // keyboard keys: as big as the Azeron's, or small so the board fits the window
+  for (const k of ['sizeAzeron', 'sizeKeyboard', 'sizeMouse']) if (Number.isFinite(p?.[k])) out[k] = Math.max(40, Math.min(250, Math.round(p[k])));   // panel sizes in percent
   for (const k of ['extra', 'showThrough']) {   // showThrough: array, or null = every layer (the default)
     if (Array.isArray(p?.[k])) out[k] = [...new Set(p[k].filter((t) => ['air', 'heli', 'ground', 'naval', 'sub', 'infantry', 'spectator'].includes(t)))];
     else if (k === 'showThrough' && p?.[k] === null) out[k] = null;
@@ -40,13 +53,15 @@ const cleanUi = (p) => {
 };
 
 const readJson = (p, d) => { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return d; } };
+/** Write via a temp file + rename, so a crash mid-write can't leave a half-written settings file. */
+const writeJson = (p, v) => { const tmp = `${p}.tmp`; writeFileSync(tmp, JSON.stringify(v, null, 2)); renameSync(tmp, p); };
 const catalog = readJson(join(ROOT, 'data', 'catalog.json'), null)?.items;
 const presets = readJson(join(ROOT, 'data', 'presets.json'), null);
 const layouts = readJson(join(ROOT, 'data', 'layouts.json'), {});
 if (!catalog || !presets) { console.error('data/catalog.json or presets.json missing - run: npm run build-data <unpacked-dir>'); process.exit(1); }
 
 // Layout sketched by the user: Left | (wheel column: up / click / down) | Right on top, five thumb-side buttons on the left.
-// Buttons without a known game input ("Side n") are placeholders: set what they send in Edit layout.
+// Buttons without a known game input ("Side n") are placeholders: set what they send in Settings > Mouse layout.
 // Wheel up/down are WT mouse buttons 5/6 (inferred). The UI merges them into one "Scroll wheel" card when the wheel is bound as an axis.
 const DEFAULT_MOUSE = [
   { id: 'side5', label: 'Side 5', c: 0, r: 0 },
@@ -83,31 +98,55 @@ function findSources() {
   return out.sort((a, b) => (b.live ? 1 : 0) - (a.live ? 1 : 0) || b.mtime - a.mtime);
 }
 
-const axisTab = (name) =>
+// Which layer an axis belongs to: the game's own grouping (the catalog) decides; the name prefix is only the tie-break
+// for an axis listed under several layers, and the fallback for one the catalog doesn't know.
+const axisGuess = (name) =>
   /^gm_/.test(name) ? 'ground' : /^ship_/.test(name) ? 'naval' : /^(sub_|submarine_)/.test(name) ? 'sub' : /^human_uav/.test(name) ? 'drone'
     : /^human_/.test(name) ? 'infantry' : /^helicopter_|^heli_/.test(name) ? 'heli' : /^(cam_|decal_)/.test(name) ? 'spectator' : 'air';
+const axisTabs = new Map();
+for (const it of catalog) if (it.axis) (axisTabs.get(it.id) ?? axisTabs.set(it.id, []).get(it.id)).push(it.tab);
+const axisTab = (name) => {
+  const guess = axisGuess(name);
+  const tabs = axisTabs.get(name);
+  return !tabs || tabs.includes(guess) ? guess : tabs[0];
+};
 
-function azeronKeyView(k, offset) {
-  const out = { ...k };
-  if (k.kind === 'joy') { out.joyCode = offset + k.joyBtn - 1; out.ident = `JOY ${k.joyBtn}`; }
-  else if (k.kind === 'key') {
-    const key = k.key;
+/** Adds what the page needs to one decoded Azeron function: its name (`ident`), and for game-visible ones the code the game sees
+ *  (`joyCode`) or the Windows virtual-key that shows it is held (`vk`, for the live highlight). */
+function functionView(f, offset) {
+  const out = { ...f };
+  if (f.kind === 'joy') { out.joyCode = offset + f.joyBtn - 1; out.ident = `JOY ${f.joyBtn}`; }
+  else if (f.kind === 'key') {
+    const key = f.key;
     out.ident = key.code == null ? `VK ${key.unknownVk}` : [...key.mods, key.code].map(keyName).join('+');
     out.modOnly = !!key.modOnly;
-  } else if (k.kind === 'dir') out.ident = `Stick ${({ 0: 'Up', 90: 'Right', 180: 'Down', 270: 'Left' })[k.dir] ?? k.dir + '°'}`;
-  else if (k.kind === 'analog') out.ident = 'Analog stick';
+  } else if (f.kind === 'dir') out.ident = `Stick ${({ 0: 'Up', 90: 'Right', 180: 'Down', 270: 'Left' })[f.dir] ?? f.dir + '°'}`;
+  else if (f.kind === 'analog') out.ident = 'Analog stick';
+  else if (f.kind === 'mouse') { out.ident = mouseName(f.mouse); out.vk = MOUSE_VK[f.mouse] ?? null; }
+  else if (f.kind === 'wheel') out.ident = f.wheel === 'up' ? 'Wheel up' : 'Wheel down';
+  else if (f.kind === 'other') out.ident = f.label;
   else out.ident = '';
   return out;
+}
+function azeronKeyView(k, offset) {
+  return { ...functionView(k, offset), alt: (k.alt ?? []).map((a) => functionView(a, offset)) };
 }
 
 function buildState() {
   const cfg = loadConfig();
   const sources = findSources();
-  const machine = cfg.machine === 'auto' ? sources[0]?.path : cfg.machine;
-  if (!machine) throw new Error('No War Thunder config found. Set "machine" in config.json.');
-  const controls = readControls(machine);
-  const { effective, origin, axes: effAxes, chain } = resolveBinds(controls, presets);
   const warnings = [];
+  let machine = cfg.machine === 'auto' ? sources[0]?.path : cfg.machine;
+  if (!machine) throw new Error('No War Thunder config found. Set "machine" in config.json.');
+  let controls;
+  try { controls = readControls(machine); } catch (e) {
+    // the chosen file is gone or unreadable: carry on with the newest live config rather than leaving the page empty
+    if (cfg.machine === 'auto' || !sources[0] || sources[0].path === machine) throw e;
+    warnings.push(`Could not read ${machine} (${e.code ?? e.message}); showing ${sources[0].label} instead. Pick a file in Settings.`);
+    machine = sources[0].path;
+    controls = readControls(machine);
+  }
+  const { effective, origin, axes: effAxes, chain } = resolveBinds(controls, presets);
   let devices = readDeviceMapping(controls);
   // exported presets carry no deviceMapping: borrow the live file's so joystick numbering still works
   if (!devices.length) {
@@ -144,16 +183,29 @@ function buildState() {
   try {
     const store = readStore();
     const profile = readProfile(store, cfg.azeronProfile);
+    if (profile.name !== cfg.azeronProfile) warnings.push(`Azeron profile "${cfg.azeronProfile}" not found; showing the active profile "${profile.name}". Pick one in Settings.`);
     const keys = Object.fromEntries(Object.entries(profile.keys).map(([id, k]) => [id, azeronKeyView(k, azOffset)]));
     azeron = { name: profile.name, keys, profiles: listProfiles(store).map((p) => p.name), offset: azOffset, device: azDev ?? null };
   } catch (e) { warnings.push(`Azeron: ${e.message}`); }
+  // Keys the drawing doesn't have (another Azeron model, a newer firmware) but that are wired and send something the game can
+  // bind get a row of their own under the drawn keys, so nothing that is bound is ever invisible.
+  let azLayout = layouts.azeron;
+  if (azeron) {
+    const drawn = new Set(azLayout.cells.map((c) => c.id));
+    const extra = Object.values(azeron.keys).filter((k) => !drawn.has(k.id) && k.pin !== 255 && ['joy', 'key', 'mouse', 'wheel', 'dir'].includes(k.kind));
+    if (extra.length) {
+      azLayout = { ...azLayout, rows: azLayout.rows + Math.ceil(extra.length / azLayout.cols),
+        cells: [...azLayout.cells, ...extra.map((k, i) => ({ id: k.id, c: i % azLayout.cols, r: azLayout.rows + Math.floor(i / azLayout.cols), extra: true }))] };
+    }
+  }
 
   // G502: user-edited layout (mouse-layout.json) + optional G HUB profile used only to *offer* buttons
   let ghubProfiles = [];
   let ghubSlots = [];
   try {
-    ghubProfiles = listGHubProfiles();
-    if (cfg.ghubProfile) ghubSlots = readGHubProfile(cfg.ghubProfile);
+    const ghub = loadGHub();   // one read (cached until G HUB's files change) serves both the profile list and the chosen profile
+    ghubProfiles = listGHubProfiles(ghub);
+    if (cfg.ghubProfile) ghubSlots = readGHubProfile(ghub, cfg.ghubProfile, { model: cfg.ghubModel, overrides: cfg.ghubKeyOverrides });
   } catch (e) { warnings.push(`G HUB: ${e.message}`); }
   // each mouse cell also carries the Windows virtual-key that tells us when it is pressed (live highlight)
   const mouseCells = (readJson(MOUSE_PATH, null) ?? DEFAULT_MOUSE).map((c) => ({ ...c, vk: c.mouse != null ? MOUSE_VK[c.mouse] ?? null : c.key != null ? dikToVk(c.key) : null }));
@@ -166,9 +218,10 @@ function buildState() {
     labels: readJson(LABELS_PATH, {}),
     ui: readJson(UI_PATH, {}),
     keyTable: keyTable(),
-    layouts: { azeron: layouts.azeron, keyboard: keyboardLayout(cfg.keyboardLayout) },
+    layouts: { azeron: azLayout, keyboard: keyboardLayout(cfg.keyboardLayout) },
     keyboardChoices,
     config: cfg,
+    dataDir: DATA_DIR,
     stamp: stamp(machine),
   };
 }
@@ -179,7 +232,31 @@ function stamp(machine) {
 }
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml' };
-const send = (res, code, body, type = 'application/json') => { res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store' }); res.end(body); };
+// The page only ever loads its own script, styles and API: anything injected into it cannot run or phone out.
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+const send = (res, code, body, type = 'application/json') => {
+  if (res.headersSent) { res.end(); return; }
+  res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': CSP });
+  res.end(body);
+};
+
+/** Only this app's own pages may call the API: blocks other websites (and DNS rebinding) from reading config or live key state. */
+function apiAllowed(req) {
+  const host = req.headers.host ?? '';
+  if (!['127.0.0.1', 'localhost'].includes(host.replace(/:\d+$/, ''))) return false;
+  const origin = req.headers.origin;
+  if (origin) {
+    let originHost;
+    try { originHost = new URL(origin).host; } catch { return false; }   // "null" (sandboxed page, file://) and other junk
+    if (originHost !== host) return false;
+  }
+  // A plain <img>/<script> tag on another site sends no Origin header, but the browser still says where the request came from.
+  const site = req.headers['sec-fetch-site'];
+  return !site || site === 'same-origin' || site === 'none';
+}
+
+const LABEL_KEY = /^[\w:.\- ]{1,40}$/;                                 // Azeron key ids, mouse cell ids, keyboard scancodes / "g:Fn"
+const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 function readBody(req, cb) {
   let body = '';
@@ -190,17 +267,14 @@ function readBody(req, cb) {
 const LAYERS = new Set(['common', 'air', 'heli', 'ground', 'naval', 'sub', 'infantry', 'spectator', 'ground-drone', 'naval-drone']);
 const clean = (s, n) => String(s ?? '').slice(0, n);
 
-export function createServer() {
+/** cleanTemp: sweep G HUB temp copies left behind by older versions of this app, which never deleted them (off in the tests). */
+export function createServer({ cleanTemp = true } = {}) {
   const live = createLive();
+  if (cleanTemp) cleanStaleCopies();
   const server = http.createServer((req, res) => {
-    const url = new URL(req.url, 'http://localhost');
     try {
-      // Only this app's own pages may call the API: blocks other websites (and DNS rebinding) from reading config or live key state.
-      if (url.pathname.startsWith('/api/')) {
-        const host = (req.headers.host ?? '').replace(/:\d+$/, '');
-        const origin = req.headers.origin;
-        if (!['127.0.0.1', 'localhost'].includes(host) || (origin && new URL(origin).host !== req.headers.host)) return send(res, 403, '{"error":"forbidden"}');
-      }
+      const url = new URL(req.url, 'http://localhost');
+      if (url.pathname.startsWith('/api/') && !apiAllowed(req)) return send(res, 403, '{"error":"forbidden"}');
       if (url.pathname === '/api/live') {
         const vid = /^[0-9a-fA-F]{4}$/.test(url.searchParams.get('vid') ?? '') ? url.searchParams.get('vid') : '';
         const pid = /^[0-9a-fA-F]{4}$/.test(url.searchParams.get('pid') ?? '') ? url.searchParams.get('pid') : '';
@@ -219,27 +293,36 @@ export function createServer() {
             const p = JSON.parse(body);
             if (url.pathname === '/api/config') {
               const next = { ...loadConfig() };
-              for (const k of ['machine', 'azeronProfile', 'ghubProfile', 'stickCal']) if (typeof p[k] === 'string') next[k] = clean(p[k], 500);
+              for (const k of ['azeronProfile', 'ghubProfile', 'stickCal']) if (typeof p[k] === 'string') next[k] = clean(p[k], 500);
+              // the controls file can only be one this app found itself ("auto", or an entry of the list it offers)
+              if (typeof p.machine === 'string') {
+                if (p.machine !== 'auto' && !findSources().some((s) => s.path === p.machine)) throw new Error('unknown controls file');
+                next.machine = p.machine;
+              }
               if (keyboardChoices.some((c) => c.id === p.keyboardLayout)) next.keyboardLayout = p.keyboardLayout;
-              writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2));
+              writeJson(CONFIG_PATH, next);
             } else if (url.pathname === '/api/ui') {
-              writeFileSync(UI_PATH, JSON.stringify(cleanUi(p), null, 2));
+              writeJson(UI_PATH, cleanUi(p));
             } else if (url.pathname === '/api/labels') {
-              // { dev:'az'|'ms', key:'36', layer:'air', text:'Bino' }  (empty text deletes)
-              if (!['az', 'ms', 'kb'].includes(p.dev) || !LAYERS.has(p.layer)) throw new Error('bad label target');
-              const all = readJson(LABELS_PATH, {});
-              const dev = (all[p.dev] ??= {});
-              const key = clean(p.key, 40);
+              // { dev:'az'|'ms'|'kb', key:'36', layer:'air', text:'Bino' }  (empty text deletes)
+              const key = String(p.key ?? '');
+              if (!['az', 'ms', 'kb'].includes(p.dev) || !LAYERS.has(p.layer) || !LABEL_KEY.test(key) || RESERVED_KEYS.has(key)) throw new Error('bad label target');
+              const saved = readJson(LABELS_PATH, {});
+              const all = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+              const own = (o, k) => (Object.hasOwn(o, k) && o[k] && typeof o[k] === 'object' ? o[k] : (o[k] = {}));
+              const dev = own(all, p.dev);
+              const entry = own(dev, key);
               const text = clean(p.text, 60).trim();
-              dev[key] ??= {};
-              if (text) dev[key][p.layer] = text; else delete dev[key][p.layer];
-              if (!Object.keys(dev[key]).length) delete dev[key];
-              writeFileSync(LABELS_PATH, JSON.stringify(all, null, 2));
+              if (text) entry[p.layer] = text; else delete entry[p.layer];
+              if (!Object.keys(entry).length) delete dev[key];
+              writeJson(LABELS_PATH, all);
             } else if (url.pathname === '/api/mouse-layout') {
               if (!Array.isArray(p.cells) || p.cells.length > 40) throw new Error('bad layout');
               const seen = new Set();
               const cells = p.cells.map((c) => {
+                if (!c || typeof c !== 'object') throw new Error('bad layout');
                 const id = clean(c.id, 30) || 'btn' + seen.size;
+                if (!LABEL_KEY.test(id) || RESERVED_KEYS.has(id)) throw new Error(`bad id ${id}`);   // the id doubles as the key of this button's labels
                 if (seen.has(id)) throw new Error(`duplicate id ${id}`);
                 seen.add(id);
                 const cell = { id, label: clean(c.label, 30) || id, c: Math.max(0, Math.min(7, Number(c.c) | 0)), r: Math.max(0, Math.min(9, Number(c.r) | 0)) };
@@ -247,14 +330,15 @@ export function createServer() {
                 else if (Number.isInteger(c.key) && c.key > 0 && c.key < 256) cell.key = c.key;
                 return cell;
               });
-              writeFileSync(MOUSE_PATH, JSON.stringify(cells, null, 2));
+              writeJson(MOUSE_PATH, cells);
             } else return send(res, 404, '{"error":"unknown endpoint"}');
             send(res, 200, '{"ok":true}');
           } catch (e) { send(res, 400, JSON.stringify({ error: String(e.message) })); }
         });
       }
       // static
-      const rel = url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname);
+      let rel;
+      try { rel = url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname); } catch { return send(res, 400, 'bad request', 'text/plain'); }
       const file = resolve(PUBLIC, '.' + rel);
       if (!file.startsWith(PUBLIC + sep) || !existsSync(file) || !statSync(file).isFile()) return send(res, 404, 'not found', 'text/plain');
       send(res, 200, readFileSync(file), MIME[extname(file)] ?? 'application/octet-stream');
@@ -273,4 +357,3 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   // Loopback only: this exposes local config contents.
   createServer().listen(PORT, '127.0.0.1', () => console.log(`War Thunder keybinder: http://localhost:${PORT}`));
 }
-export { mouseName };

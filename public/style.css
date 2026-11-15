@@ -80,8 +80,20 @@ button:hover, select:hover { border-color: var(--bound-edge); }
 
 .center { overflow: auto; padding: 18px 20px 24px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .devices { display: flex; flex-wrap: wrap; gap: 28px 40px; align-items: flex-end; justify-content: safe center; }   /* the mouse lines up with the bottom of the Azeron */
+/* Settings > View > "Side by side": the panels stay in one row and the row scrolls sideways (scroll bar under it) instead of a
+   panel moving down. The padding leaves room for a pressed key's glow, which the scrolling box would otherwise cut off. */
+body.side-scroll .devices { flex: none; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; padding: 12px 12px 16px; margin-top: -12px; }
+body.side-scroll .device { flex: none; }
+body.side-scroll .device.keyboard { max-width: none; }
+/* Settings > View > Panel sizes: each device panel is magnified or shrunk as a whole (keys, spacing and text together).
+   --dscale is set per panel by the page (1 = 100%). The panel's title keeps its size. */
+.device .grid, .device .kbd { zoom: var(--dscale, 1); }
+/* an enlarged Azeron or mouse panel can be wider than the window: stacked, it then scrolls sideways on its own, like the keyboard
+   (side by side the whole row scrolls). Only enlarged panels get this, so a pressed key's glow is never clipped at normal size. */
+body:not(.side-scroll) .device.scaled-up { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding: 0 0 12px; }
+body:not(.side-scroll) .device.scaled-up h2 { position: sticky; left: 0; width: max-content; }
 .device h2 { margin-bottom: 10px; }
-.device.mouse { width: calc(var(--mcols, 4) * var(--w) + (var(--mcols, 4) - 1) * var(--gap)); min-width: 200px; }.grid { display: grid; gap: var(--gap); position: relative; }
+.device.mouse { width: calc((var(--mcols, 4) * var(--w) + (var(--mcols, 4) - 1) * var(--gap)) * var(--dscale, 1)); min-width: 200px; }.grid { display: grid; gap: var(--gap); position: relative; }
 .card { position: relative; border: 1.5px solid transparent; border-radius: 9px; padding: 14px 4px 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; background: var(--other); cursor: pointer; overflow: hidden; font: inherit; color: var(--text); }
 .card:hover { filter: brightness(1.18); }
 .card .id { position: absolute; left: 6px; bottom: 4px; font-size: 10px; color: #fff; opacity: .85; }
@@ -97,6 +109,8 @@ button:hover, select:hover { border-color: var(--bound-edge); }
 .card.unbound { background: var(--unbound); border-color: var(--unbound-edge); color: #ffb3c1; }
 .card.dir { background: #1d1936; border-color: var(--other-edge); color: var(--dim); }
 .card.empty { background: transparent; border-color: var(--empty-edge); opacity: .55; }
+.card.special { background: #2b2440; border-color: #b08a3c; border-style: dashed; color: #e9dcbb; }   /* an Azeron function (macro, profile switch, Xbox button, ...) */
+.card .mod.alt { color: #bfe9f3; }
 .card.hl { box-shadow: 0 0 0 3px var(--cyan); }
 .card.live { box-shadow: 0 0 0 3px #fff, 0 0 22px 6px rgba(41, 228, 255, .85); filter: brightness(1.4); transform: scale(1.05); z-index: 3; }
 .live-ind { font-size: 11px; color: var(--cyan); margin-left: 6px; }
@@ -130,10 +144,17 @@ body.compact .dock { display: none; }
 .lbl span { width: 78px; flex: none; font-size: 12px; }
 .lbl input { flex: 1; min-width: 0; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 3px 7px; font: inherit; }
 button.mini { padding: 1px 8px; font-size: 11px; border-radius: 6px; margin-left: 8px; }
-.mouse-editor { margin-top: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; width: max(100%, 330px); position: relative; z-index: 2; }
+/* the mouse-layout editor (Settings > Mouse layout): one row per button */
+.mouse-editor { margin-top: 6px; }
+.mouse-editor .note { padding: 2px 0 6px; font-size: 12px; margin: 0; }
+.mouse-editor button:disabled { opacity: .45; cursor: default; }
+.mrow { padding: 3px 0; border-bottom: 1px solid rgba(255, 255, 255, .04); }
+.mrow .m-kind { width: 122px; }
+.mrow .m-code { width: 138px; }
+.mrow .m-del { margin-left: auto; }
 .mrow, .mrow-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 5px 0; }
-.mrow .m-label { width: 98px; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; }
-.mrow select { max-width: 130px; padding: 3px 4px; }
+.mrow .m-label { width: 130px; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; }
+.mrow select { max-width: 150px; padding: 3px 4px; }
 .pos { display: inline-flex; align-items: center; gap: 4px; color: var(--dim); font-size: 12px; }
 .pos input[type="number"] { width: 46px; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 3px 4px; font: inherit; }
 
@@ -166,7 +187,21 @@ body.no-azeron .device.azeron, body.no-keyboard .device.keyboard, body.no-mouse 
 body { --ku: clamp(24px, calc((100vw - var(--side) - 60px) / 23.6), 50px); }
 body.compact { --ku: clamp(20px, calc((100vw - 40px) / 23.6), 44px); }
 .device.keyboard { max-width: 100%; }
-.kbd { position: relative; width: calc(var(--ku) * var(--kw, 23)); height: calc(var(--ku) * var(--kh, 6.5)); }
+/* --ku / --kv = one key unit across / down, --kgap = the space between keys. "Fit the window" keys are small squares sized so
+   the whole board fits; the default (body.kb-big) makes a 1-unit key exactly one Azeron card: --w wide, --h tall, --gap apart. */
+.kbd { --kv: var(--ku); --kgap: 3px; position: relative; width: calc(var(--ku) * var(--kw, 23)); height: calc(var(--kv) * var(--kh, 6.5)); }
+body.kb-big .kbd { --ku: calc(var(--w) + var(--gap)); --kv: calc(var(--h) + var(--gap)); --kgap: var(--gap); }
+/* a board of Azeron-sized keys is wider than the window: stacked, the keyboard panel scrolls sideways on its own (its title
+   stays put); side by side, the whole row of panels scrolls instead */
+body.kb-big:not(.side-scroll) .device.keyboard { overflow-x: auto; overflow-y: hidden; padding: 0 0 12px; }
+body.kb-big:not(.side-scroll) .device.keyboard h2 { position: sticky; left: 0; width: max-content; }
+body.kb-big .kkey { padding: 14px 4px; border-radius: 9px; justify-content: center; line-height: inherit; }
+body.kb-big .kkey .ident { top: 3px; left: 0; right: 0; padding: 0 4px; text-align: center; font-size: 10px; font-weight: 700; }
+body.kb-big .kkey .acts { font-size: 11px; -webkit-line-clamp: 4; }
+body.kb-big .kkey .acts.small { font-size: 9.5px; }
+body.kb-big .kkey .acts.more { font-size: 10.5px; }
+body.kb-big .kkey .lab { font-size: 12px; -webkit-line-clamp: 3; }
+body.kb-big .kkey .mod { font-size: 10px; margin-top: 2px; }
 .kkey { position: absolute; margin: 0; padding: calc(var(--ku) * .3) 1px 1px; border-radius: 5px; gap: 0; justify-content: flex-start; line-height: 1.05; overflow: hidden; }
 .kkey .ident { top: 2px; left: 3px; right: 2px; padding: 0; text-align: left; font-size: max(7px, calc(var(--ku) * .24)); font-weight: 600; }
 .kkey .acts { font-size: max(7px, calc(var(--ku) * .2)); font-weight: 600; -webkit-line-clamp: 2; text-align: center; }
@@ -174,9 +209,6 @@ body.compact { --ku: clamp(20px, calc((100vw - 40px) / 23.6), 44px); }
 .kkey .mod { font-size: max(7px, calc(var(--ku) * .19)); margin-top: 0; }
 .kkey.empty { border-color: #2f2a4f; opacity: .5; }
 .kkey.keep.empty { opacity: .8; border-color: var(--other-edge); }   /* keys that always stay visible (Fn, Win) */
-.kdecor { position: absolute; margin: 1.5px; display: flex; align-items: center; justify-content: center; font-size: 10px; color: var(--dim); border: 1px solid var(--line); background: #0d0b1c; pointer-events: none; }
-.kdecor.lcd { border-radius: 6px; }
-.kdecor.dial { border-radius: 50%; }
 
 /* "Also show" layer picker */
 .pop { position: relative; }
@@ -212,7 +244,12 @@ body.compact { --ku: clamp(20px, calc((100vw - 40px) / 23.6), 44px); }
 .set-row > span:first-child { flex: 1; min-width: 0; }
 .set-row select { max-width: 280px; min-width: 150px; }
 .set-actions { display: flex; gap: 6px; }
+.set-sub { margin-top: 14px; }
+.set-indent { margin: 6px 0 6px 16px; }
+.set-indent select { min-width: 190px; }
 .set-note { font-size: 12px; margin: 4px 0; overflow-wrap: anywhere; }
+.set-err { color: #ffb3c1; }
+.set-err:empty { display: none; }
 .host-section { display: none; }
 body.hosted .host-section { display: block; }
 
@@ -262,14 +299,19 @@ body.compact .acts { font-size: 10px; }
 .sw.idle { background: var(--other); border-color: var(--other-edge); }
 .sw.unbound { background: var(--unbound); border-color: var(--unbound-edge); }
 .sw.empty { border-color: var(--empty-edge); opacity: .6; }
+.sw.special { background: #2b2440; border-color: #b08a3c; border-style: dashed; }
 
 /* wide windows: both devices fit side by side in the centre pane */
 @media (min-width: 1500px) {
   body { --w: clamp(52px, calc((100vw - var(--side) - 210px) / 13), 86px); }
 }
+/* narrow windows: one column that scrolls as a whole. The devices come first at their full height, then the two side panels.
+   (As a grid the three rows shared the window height, which squeezed the devices into a strip hidden behind the docked details.) */
 @media (max-width: 1100px) {
   .layout, body.no-left .layout, body.no-right .layout { grid-template-columns: 1fr; overflow: auto; }
-  .side { max-height: 60vh; border: 0; border-top: 1px solid var(--line); }
-  .center { order: -1; }
+  body:not(.compact) .layout { display: flex; flex-direction: column; }
+  body:not(.compact) .center { order: -1; flex: none; overflow: visible; }   /* (the docked details stay stuck to the bottom while the devices are in view) */
+  .side { flex: none; max-height: 60vh; border: 0; border-top: 1px solid var(--line); }
+  body, body.no-left, body.no-right, body.no-left.no-right { --side: 0px; }   /* the side panels sit below, not beside */
   body { --w: clamp(34px, calc((100vw - 60px) / 9.7), 80px); }
 }

@@ -13,8 +13,8 @@
     <label class="tb-opt host-only" title="Window opacity">Opacity <input type="range" id="opacity" min="35" max="100" value="100"></label>
     <label class="tb-chk host-only" title="Make the window background see-through so only the keys show (needs the desktop app)"><input type="checkbox" id="noBg"> Hide background</label>
     <label class="tb-chk host-only" title="Overlay: compact, no panels, no background, always on top. Untick to restore your previous setup"><input type="checkbox" id="overlayChk"> Overlay</label>
-    <button class="tb host-only" id="pin"title="Keep on top of other windows" aria-pressed="false">Pin</button>
-    <button class="tb host-only" id="ghost" title="Click-through: mouse clicks pass to the game. Ctrl+Alt+L toggles it; Ctrl+Alt+K shows/hides the window" aria-pressed="false">Click-through</button>
+    <button class="tb host-only" id="pin" title="Keep on top of other windows" aria-pressed="false">Pin</button>
+    <button class="tb host-only" id="ghost" title="Click-through: mouse clicks pass to the game" aria-pressed="false">Click-through</button>
     <span class="tb-div host-only" aria-hidden="true"></span>
     <button class="tb" id="showAzeron" aria-pressed="true" title="Show or hide the Azeron panel">Azeron</button>
     <button class="tb" id="showKeyboard" aria-pressed="true" title="Show or hide the keyboard panel">Keyboard</button>
@@ -68,9 +68,8 @@
           <div class="kbd" id="keyboard"></div>
         </div>
         <div class="device mouse">
-          <h2>Mouse <button class="mini" id="editMouse">Edit layout</button></h2>
+          <h2>Mouse</h2>
           <div class="grid g502" id="g502"></div>
-          <div class="mouse-editor" id="mouseEditor" hidden></div>
         </div>
       </div>
       <div class="dock" id="dock">
@@ -81,6 +80,7 @@
         <span><i class="sw through"></i>Unbound here: shows what it does on other layers</span>
         <span><i class="sw idle"></i>Bound only on layers not shown through</span>
         <span><i class="sw unbound"></i>Set up on device, nothing bound in game</span>
+        <span><i class="sw special"></i>Azeron function (macro, profile switch, Xbox button...)</span>
         <span><i class="sw empty"></i>Not assigned on device</span>
       </div>
       </div>
@@ -121,15 +121,48 @@
       </section>
 
       <section class="set-sec">
+        <h3>View</h3>
+        <label class="set-row"><span>Device panels <span class="dim">(Azeron, keyboard, mouse)</span></span>
+          <select id="deviceFlow">
+            <option value="wrap">Stacked: a panel that doesn't fit moves down</option>
+            <option value="row">Side by side: scroll sideways</option>
+          </select></label>
+        <div class="dim set-note">Side by side keeps the panels in one row, with a scroll bar under them (the mouse wheel scrolls it too). Overlay mode always stacks.</div>
+        <div class="set-row set-sub"><span>Panel sizes <span class="dim">(keys, spacing and text scale together; at 100% a key is the same size on all three)</span></span></div>
+        <label class="set-row set-indent"><span>Azeron</span><select id="sizeAzeron" aria-label="Azeron panel size"></select></label>
+        <label class="set-row set-indent"><span>Keyboard</span><select id="sizeKeyboard" aria-label="Keyboard panel size"></select></label>
+        <label class="set-row set-indent"><span>Mouse</span><select id="sizeMouse" aria-label="Mouse panel size"></select></label>
+        <div class="dim set-note">A panel that is wider than the window scrolls sideways (its own scroll bar when stacked, the row's when side by side).
+          The keyboard can also be set to fit the window: small square keys, the whole board visible at once. Overlay mode ignores these sizes and fits everything to its window.</div>
+      </section>
+
+      <section class="set-sec">
         <h3>Keyboard</h3>
         <label class="set-row"><span>Keyboard size / layout <span class="dim">(shows what each key does in War Thunder)</span></span><select id="kbLayout"></select></label>
+        <div class="dim set-note">How big the keys are drawn is under View &gt; Panel sizes.</div>
         <div class="dim set-note" id="kbNote"></div>
+      </section>
+
+      <section class="set-sec">
+        <h3>Mouse layout</h3>
+        <div class="dim set-note">The buttons shown on the Mouse panel: what each one sends and where its card sits. Changes apply when you press Save layout.</div>
+        <div class="mouse-editor" id="mouseEditor"></div>
+      </section>
+
+      <section class="set-sec host-section">
+        <h3>Hotkeys</h3>
+        <div class="dim set-note">These work while the game has focus, so the game never sees the combination you pick here. Click one, then press the keys
+          (needs Ctrl, Alt or Win). Esc cancels, Backspace switches the hotkey off.</div>
+        <div class="set-row"><span>Overlay mode on / off <span class="dim">(clicking the tray icon does the same)</span></span>
+          <button class="mini" data-hotkey="overlay">...</button></div>
+        <div class="set-row"><span>Show / hide the window</span><button class="mini" data-hotkey="window">...</button></div>
+        <div class="set-row"><span>Click-through on / off</span><button class="mini" data-hotkey="clickThrough">...</button></div>
+        <div class="set-row"><span>Compact view on / off</span><button class="mini" data-hotkey="compact">...</button></div>
+        <div class="set-note set-err" id="hotkeyMsg" role="status"></div>
       </section>
 
       <section class="set-sec host-section">
         <h3>Overlay</h3>
-        <div class="set-row"><span>Overlay hotkey <span class="dim">(works while the game has focus; clicking the tray icon does the same)</span></span>
-          <button class="mini" id="hotkeyBtn" title="Click, then press the keys you want (needs Ctrl, Alt or Shift). Esc cancels.">Ctrl+Alt+O</button></div>
         <div class="set-row"><span>Overlay position and size <span class="dim" id="overlayBoundsText"></span></span>
           <span class="set-actions"><button class="mini" id="overlaySetup" title="Opens the overlay with a solid, resizable window so you can place it, then Save">Set up...</button><button class="mini" id="overlayBoundsReset">Reset</button></span></div>
         <div class="set-row"><span>Panels shown in overlay mode</span>

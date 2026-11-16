@@ -14,7 +14,7 @@ it also supports showing mouse and an azeron cyborg 2, and the common? keyboard 
 
 todo xd
 
-“Run npm install once, then npm run app (or double-click Keybinder.cmd).”
+https://github.com/AylaMeo/WarThunder-Keybinder/releases there probably is a release there, if there isnt then read the llm docs and make a build ig? idk live your life, quit war thunder ymmv.
 
 ## Notes
 

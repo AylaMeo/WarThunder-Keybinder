@@ -1,0 +1,49 @@
+# Builds the standalone Windows exe and attaches it to a DRAFT GitHub release.
+# Start it by pushing a version tag that matches "version" in package.json:
+#   git tag v0.2.0 && git push github v0.2.0
+# Then open the draft under Releases, edit the notes and publish it.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Check the tag matches package.json
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = '${{ github.ref_name }}'
+          if ($tag -ne "v$version") { throw "Tag $tag does not match package.json version $version (expected v$version)" }
+
+      - run: npm ci
+
+      - run: npm test
+
+      - name: Build the exe
+        shell: pwsh
+        run: ./tools/package.ps1
+
+      - name: Zip it
+        shell: pwsh
+        run: Compress-Archive -Path dist/WT-Keybinder -DestinationPath "WT-Keybinder-${{ github.ref_name }}-win.zip" -CompressionLevel Optimal
+
+      - name: Create the draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" "WT-Keybinder-${{ github.ref_name }}-win.zip" --draft --verify-tag --title "WT Keybinder ${{ github.ref_name }}" --generate-notes

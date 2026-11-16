@@ -5,19 +5,16 @@ it also supports showing mouse and an azeron cyborg 2, and the common? keyboard 
 
 ## Screenshots
 
-The Ground layer with all three panels shown: the Azeron, the keyboard and the mouse.
+<img src="docs/images/all-panels.png" width="500" alt="1">
+<img src="docs/images/azeron-panel.png" width="500" alt="3">
+<img src="docs/images/keyboard-panel.png" width="500" alt="2">
 
-![The Azeron, keyboard and mouse panels side by side on the Ground layer](docs/images/all-panels.png)
-
-Each panel can also be shown on its own, here the Azeron and the keyboard.
-
-![The Azeron panel on the Ground layer, with the Bound list on the left and Needs attention on the right](docs/images/azeron-panel.png)
-
-![The full-size keyboard panel on the Ground layer](docs/images/keyboard-panel.png)
 
 ## Getting started
 
 todo xd
+
+“Run npm install once, then npm run app (or double-click Keybinder.cmd).”
 
 ## Notes
 

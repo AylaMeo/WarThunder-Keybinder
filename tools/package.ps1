@@ -5,7 +5,7 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $electron = Join-Path $root 'node_modules\electron\dist'
-if (-not (Test-Path (Join-Path $electron 'electron.exe'))) { throw 'Electron is not installed. Run: npm install' }
+if (-not (Test-Path (Join-Path $electron 'electron.exe'))) { throw 'Electron is not installed. Run: npm install, then: node node_modules/electron/install.js (newer Electron versions download their binary separately)' }
 
 # robocopy reports success with exit codes 0-7 (1 = files copied); 8 and up mean something was NOT copied.
 function Copy-Tree($from, $to) {
